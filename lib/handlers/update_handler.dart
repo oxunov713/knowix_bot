@@ -14,6 +14,7 @@ class UpdateHandler {
     // Command handlers
     bot.command('start', messageHandler.handleStart);
     bot.command('help', messageHandler.handleHelp);
+    bot.command('stop', messageHandler.handleStop);
 
     // Document and text message handler
     bot.onMessage((ctx) async {
@@ -32,11 +33,13 @@ class UpdateHandler {
     bot.onCallbackQuery((ctx) async {
       final data = ctx.callbackQuery?.data;
 
-      // Quiz control callbacks (continue/finish)
-      if (data == 'quiz_continue' || data == 'quiz_finish') {
+      // Quiz control callbacks (continue/finish/restart)
+      if (data == 'quiz_continue' ||
+          data == 'quiz_finish' ||
+          data == 'quiz_restart') {
         await pollAnswerHandler.handleQuizControl(ctx);
       }
-      // Shuffle choice callback
+      // Shuffle choice and time selection callbacks
       else {
         await messageHandler.handleCallback(ctx);
       }

@@ -5,94 +5,240 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import '../services/quiz_service.dart';
 import '../services/quiz_session_manager.dart';
-import '../models/quiz.dart';
 
-/// Handles incoming messages
+/// Xabarlarni boshqaruvchi
 class MessageHandler {
   final QuizService quizService;
   final QuizSessionManager sessionManager;
 
   MessageHandler(this.quizService, this.sessionManager);
 
-  /// Handle start command
+  /// Start buyrug'ini boshqarish
   Future<void> handleStart(Context ctx) async {
+    final userId = ctx.message?.from?.id;
+    if (userId != null) {
+      // Mavjud sessiyani tozalash
+      sessionManager.endSession(userId);
+    }
+
     await ctx.reply(
-      '👋 Welcome to Quiz Bot!\n\n'
-          'Send me a file (TXT, PDF, DOC, DOCX) containing quiz questions.\n\n'
-          '📝 Format:\n'
-          '+++++ Question text\n'
-          '===== Option 1\n'
-          '===== #Correct option\n'
-          '===== Option 3\n\n'
-          'The # symbol marks the correct answer.\n'
-          'Tokens can be on the same line or separate lines.',
+      '👋 *HEMIS Quiz Botga xush kelibsiz!*\n\n'
+          '📚 HEMIS tizimidan eksport qilingan test fayllarini yuboring.\n\n'
+          '📄 *Qo\'llab-quvvatlanadigan formatlar:*\n'
+          '   • DOCX (tavsiya etiladi) ✅\n'
+          '   • DOC\n'
+          '   • TXT\n\n'
+          '❌ *MUHIM:* PDF format qo\'llab-quvvatlanmaydi!\n\n'
+          '💡 *HEMIS\'dan fayl olish:*\n'
+          '1️⃣ HEMIS tizimiga kiring\n'
+          '2️⃣ Test bo\'limiga o\'ting\n'
+          '3️⃣ "Eksport" tugmasini bosing\n'
+          '4️⃣ *DOCX formatni* tanlang\n'
+          '5️⃣ Faylni bu yerga yuboring\n\n'
+          '🔰 Yordam uchun: /help\n'
+          '⏸ Testni to\'xtatish: /stop',
+      parseMode: ParseMode.markdown,
     );
   }
 
-  /// Handle help command
-  Future<void> handleHelp(Context ctx) async {
-    await ctx.reply(
-      '📚 Quiz Bot Help\n\n'
-          '1️⃣ Upload a file with quiz questions\n'
-          '2️⃣ Enter subject name\n'
-          '3️⃣ Choose shuffle option\n'
-          '4️⃣ Set time per question\n'
-          '5️⃣ Answer quiz questions\n\n'
-          '📝 File Format:\n'
-          '• +++++ starts a new question\n'
-          '• ===== starts a new option\n'
-          '• # marks the correct answer\n\n'
-          '✅ Supported files: TXT, PDF, DOC, DOCX',
-    );
-  }
+  /// Stop buyrug'ini boshqarish
+  Future<void> handleStop(Context ctx) async {
+    final userId = ctx.message?.from?.id;
+    if (userId == null) return;
 
-  /// Handle document upload
-  Future<void> handleDocument(Context ctx) async {
-    final document = ctx.message?.document;
-    if (document == null) return;
+    final session = sessionManager.getSession(userId);
 
-    final fileName = document.fileName ?? 'unknown';
-
-    // Check file type
-    if (!quizService.isSupportedFile(fileName)) {
+    if (session == null) {
       await ctx.reply(
-        '❌ Unsupported file type.\n'
-            'Please send TXT, PDF, DOC, or DOCX files.',
+        '❌ *Sizda faol test yo\'q!*\n\n'
+            '📚 Test boshlash uchun: /start',
+        parseMode: ParseMode.markdown,
       );
       return;
     }
 
-    await ctx.reply('⏳ Processing file...');
+    // Hozirgi holatni ko'rsatish
+    final currentQuestion = session.currentQuestionIndex + 1;
+    final totalQuestions = session.quiz.questions.length;
+    final correctAnswers = session.correctAnswers;
+
+    await ctx.reply(
+      '⏸ *Test to\'xtatildi!*\n\n'
+          '📊 *Hozirgi holat:*\n'
+          '   • Savol: *$currentQuestion/$totalQuestions*\n'
+          '   • To\'g\'ri javoblar: *$correctAnswers*\n\n'
+          '🤔 Nima qilmoqchisiz?',
+      parseMode: ParseMode.markdown,
+      replyMarkup: InlineKeyboard(
+        inlineKeyboard: [
+          [
+            InlineKeyboardButton(
+              text: '▶️ Davom ettirish',
+              callbackData: 'quiz_continue',
+            ),
+          ],
+          [
+            InlineKeyboardButton(
+              text: '🏁 Natijani ko\'rish',
+              callbackData: 'quiz_finish',
+            ),
+          ],
+          [
+            InlineKeyboardButton(
+              text: '🔄 Qaytadan boshlash',
+              callbackData: 'quiz_restart',
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Yordam buyrug'i
+  Future<void> handleHelp(Context ctx) async {
+    await ctx.reply(
+      '📚 *HEMIS Quiz Bot - Yo\'riqnoma*\n\n'
+          '🎯 *Bot qanday ishlaydi?*\n'
+          '1️⃣ HEMIS formatidagi DOCX/DOC/TXT fayl yuklang\n'
+          '2️⃣ Fan nomini kiriting\n'
+          '3️⃣ Savollarni aralashtirish variantini tanlang\n'
+          '4️⃣ Vaqtni button orqali tanlang\n'
+          '5️⃣ Testni boshlang va javob bering!\n\n'
+          '⚙️ *Buyruqlar:*\n'
+          '   • /start - Botni boshlash\n'
+          '   • /stop - Testni to\'xtatish\n'
+          '   • /help - Yordam\n\n'
+          '📝 *HEMIS fayl formati:*\n'
+          '```\n'
+          '+++++ Savol matni\n'
+          '===== Variant A\n'
+          '===== #To\'g\'ri javob\n'
+          '===== Variant C\n'
+          '===== Variant D\n'
+          '```\n\n'
+          '⏸ *Testni to\'xtatish:*\n'
+          '   • /stop buyrug\'i yoki\n'
+          '   • 3 ta savolga javob bermasangiz avtomatik to\'xtatiladi\n'
+          '   • Keyin davom ettirish yoki natijani ko\'rish mumkin\n\n'
+          '💡 *Maslahatlar:*\n'
+          '   • DOCX format eng yaxshi ishlaydi\n'
+          '   • # belgisi to\'g\'ri javobni ko\'rsatadi\n'
+          '   • Agar # yo\'q bo\'lsa, birinchi variant to\'g\'ri deb olinadi\n'
+          '   • Kamida 2 ta variant bo\'lishi kerak\n'
+          '   • PDF ishlamaydi, faqat DOCX yuboring!\n\n'
+          '❓ Savollaringiz bo\'lsa: @support_username',
+      parseMode: ParseMode.markdown,
+    );
+  }
+
+  /// Hujjatni yuklashni boshqarish
+  Future<void> handleDocument(Context ctx) async {
+    final document = ctx.message?.document;
+    if (document == null) return;
+
+    final fileName = document.fileName ?? 'noma\'lum';
+
+    // Fayl turini tekshirish
+    if (!quizService.isSupportedFile(fileName)) {
+      final extension = path.extension(fileName).toLowerCase();
+
+      String errorMsg = '❌ *Fayl turi qo\'llab-quvvatlanmaydi!*\n\n';
+
+      if (extension == '.pdf') {
+        errorMsg += '🚫 *PDF format ishlamaydi!*\n\n'
+            '💡 *Yechim:*\n'
+            '1️⃣ HEMIS\'da testni qayta oching\n'
+            '2️⃣ "Eksport" tugmasini bosing\n'
+            '3️⃣ *DOCX formatni* tanlang\n'
+            '4️⃣ Yangi faylni bu yerga yuboring\n\n'
+            '✅ DOCX format 100% ishlaydi va barcha savollarni topadi!';
+      } else {
+        errorMsg += '📄 Iltimos, quyidagi formatdagi fayllarni yuboring:\n'
+            '   • DOCX (tavsiya etiladi) ✅\n'
+            '   • DOC\n'
+            '   • TXT\n\n'
+            '⚠️ PDF qo\'llab-quvvatlanmaydi!';
+      }
+
+      await ctx.reply(errorMsg, parseMode: ParseMode.markdown);
+      return;
+    }
+
+    // Fayl hajmini tekshirish (10MB limit)
+    if (document.fileSize != null && document.fileSize! > 10 * 1024 * 1024) {
+      await ctx.reply(
+        '❌ *Fayl juda katta!*\n\n'
+            'Maksimal hajm: 10 MB\n'
+            'Sizning fayl: ${(document.fileSize! / 1024 / 1024).toStringAsFixed(1)} MB\n\n'
+            '💡 Kichikroq fayl yuboring yoki faylni bo\'lib yuboring.',
+        parseMode: ParseMode.markdown,
+      );
+      return;
+    }
+
+    final loadingMsg = await ctx.reply('⏳ Fayl qayta ishlanmoqda...\n\n'
+        '📊 Iltimos kuting, bu bir necha soniya davom etishi mumkin...');
 
     try {
-      // Download file
+      // Faylni yuklash
       final file = await _downloadFile(ctx.api, document.fileId, fileName);
 
-      // Process file
+      print('📁 Fayl yuklandi: ${file.path}');
+
+      // Faylni qayta ishlash
       final quiz = await quizService.processFile(file);
 
-      // Clean up temp file
+      // Vaqtinchalik faylni o'chirish
       await file.delete();
 
-      // Create temporary session with quiz
+      // Sessiya yaratish
       final userId = ctx.message!.from!.id;
       sessionManager.createSession(userId, quiz);
 
-      await ctx.reply(
-        '✅ File processed successfully!\n'
-            'Found ${quiz.questions.length} questions.\n\n'
-            'Please enter the subject name:',
+      await ctx.api.editMessageText(
+        ChatID(userId),
+        loadingMsg.messageId,
+        '✅ *Fayl muvaffaqiyatli qayta ishlandi!*\n\n'
+            '📊 Topilgan savollar: *${quiz.questions.length} ta*\n\n'
+            '📚 Iltimos, *fan nomini* kiriting:',
+        parseMode: ParseMode.markdown,
       );
 
     } catch (e) {
-      await ctx.reply(
-        '❌ Error processing file:\n${e.toString()}\n\n'
-            'Please check the file format and try again.',
+      print('❌ Xatolik: $e');
+
+      String errorMsg = '❌ *Xatolik yuz berdi!*\n\n';
+
+      final errorStr = e.toString();
+
+      if (errorStr.contains('No valid questions') ||
+          errorStr.contains('topilmadi')) {
+        errorMsg += '📝 Faylda to\'g\'ri formatdagi savollar topilmadi.\n\n'
+            '🔍 *Tekshiring:*\n'
+            '   • HEMIS formatida ekanligiga\n'
+            '   • +++++ va ===== belgilari borligiga\n'
+            '   • Kamida 2 ta variant borligiga\n\n'
+            '💡 /help buyrug\'i orqali formatni ko\'ring.';
+      } else if (errorStr.contains('Qo\'llab-quvvatlanmaydigan')) {
+        errorMsg += errorStr.replaceAll('Exception: ', '').replaceAll('UnsupportedError: ', '');
+      } else {
+        errorMsg += 'Sabab: ${errorStr.replaceAll('Exception: ', '')}\n\n'
+            '💡 *Qaytadan urinib ko\'ring:*\n'
+            '   • DOCX formatda eksport qiling\n'
+            '   • Fayl to\'g\'ri ochilishini tekshiring\n'
+            '   • Agar muammo davom etsa, /help ko\'ring';
+      }
+
+      await ctx.api.editMessageText(
+        ChatID(ctx.message!.from!.id),
+        loadingMsg.messageId,
+        errorMsg,
+        parseMode: ParseMode.markdown,
       );
     }
   }
 
-  /// Handle text message (for subject name and time input)
+  /// Matnli xabarni boshqarish
   Future<void> handleText(Context ctx) async {
     final userId = ctx.message?.from?.id;
     if (userId == null) return;
@@ -100,34 +246,35 @@ class MessageHandler {
     final text = ctx.message?.text;
     if (text == null || text.isEmpty) return;
 
-    // Ignore commands
+    // Buyruqlarni e'tiborsiz qoldirish
     if (text.startsWith('/')) return;
 
     final session = sessionManager.getSession(userId);
 
-    // STATE 1: Waiting for subject name (session exists but no subject set)
+    // HOLAT 1: Fan nomi kutilmoqda
     if (session != null && session.quiz.subjectName == null) {
-      print('📚 User $userId entered subject: $text');
+      print('📚 Foydalanuvchi $userId fan nomini kiritdi: $text');
 
-      // Update quiz with subject name
+      // Fan nomi bilan yangilash
       final updatedQuiz = session.quiz.copyWith(subjectName: text);
       sessionManager.createSession(userId, updatedQuiz);
 
-      // Ask about shuffling
+      // Aralashtirish haqida so'rash
       await ctx.reply(
-        '📚 Subject: $text\n\n'
-            'Would you like to shuffle the questions?',
+        '📚 *Fan:* $text\n\n'
+            '🔀 Savollarni tasodifiy tartibda berishni xohlaysizmi?',
+        parseMode: ParseMode.markdown,
         replyMarkup: InlineKeyboard(
           inlineKeyboard: [
             [
               InlineKeyboardButton(
-                text: '🔀 Yes, shuffle',
+                text: '🔀 Ha, aralashtirsin',
                 callbackData: 'shuffle:yes',
               ),
             ],
             [
               InlineKeyboardButton(
-                text: '📋 No, keep order',
+                text: '📋 Yo\'q, ketma-ketlikda',
                 callbackData: 'shuffle:no',
               ),
             ],
@@ -137,37 +284,60 @@ class MessageHandler {
       return;
     }
 
-    // STATE 2: Waiting for time input (shuffle choice already made)
-    if (session != null &&
-        session.pendingShuffleChoice != null &&
-        session.quiz.timePerQuestion == 0) {
-
-      print('⏱ User $userId entered time: $text');
-
-      // Parse time
-      final time = int.tryParse(text);
-      if (time == null || time < 0) {
-        await ctx.reply('❌ Please enter a valid number (0 for no timer):');
-        return;
-      }
-
-      if (time > 0 && time < 5) {
-        await ctx.reply('❌ Minimum time is 5 seconds. Please enter 0 for no timer or 5+ seconds:');
-        return;
-      }
-
-      if (time > 600) {
-        await ctx.reply('❌ Maximum time is 600 seconds (10 minutes). Please enter a lower value:');
-        return;
-      }
-
-      // Start quiz
-      await _startQuiz(ctx, userId, time);
-      return;
-    }
+    // HOLAT 2: Vaqt kutilmoqda (endi faqat callback orqali)
+    // TextField orqali kiritish o'chirildi
   }
 
-  /// Download file from Telegram
+  /// Vaqt tanlash uchun buttonlarni ko'rsatish
+  Future<void> _showTimeSelection(Context ctx, int userId) async {
+    await ctx.reply(
+      '⏱ *Har bir savol uchun vaqtni tanlang:*\n\n'
+          '💡 Qulay variant tanlang yoki boshqa vaqtni kiriting',
+      parseMode: ParseMode.markdown,
+      replyMarkup: InlineKeyboard(
+        inlineKeyboard: [
+          [
+            InlineKeyboardButton(
+              text: '⚡️ 10 soniya',
+              callbackData: 'time:10',
+            ),
+            InlineKeyboardButton(
+              text: '⏱ 20 soniya',
+              callbackData: 'time:20',
+            ),
+          ],
+          [
+            InlineKeyboardButton(
+              text: '🕐 30 soniya',
+              callbackData: 'time:30',
+            ),
+            InlineKeyboardButton(
+              text: '⏰ 60 soniya',
+              callbackData: 'time:60',
+            ),
+          ],
+          [
+            InlineKeyboardButton(
+              text: '🕰 90 soniya',
+              callbackData: 'time:90',
+            ),
+            InlineKeyboardButton(
+              text: '⏳ 120 soniya',
+              callbackData: 'time:120',
+            ),
+          ],
+          [
+            InlineKeyboardButton(
+              text: '♾ Cheksiz',
+              callbackData: 'time:0',
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Faylni Telegram'dan yuklash
   Future<File> _downloadFile(RawAPI api, String fileId, String fileName) async {
     final file = await api.getFile(fileId);
     final filePath = file.filePath!;
@@ -175,7 +345,7 @@ class MessageHandler {
 
     final response = await http.get(Uri.parse(url));
     if (response.statusCode != 200) {
-      throw Exception('Failed to download file');
+      throw Exception('Faylni yuklab bo\'lmadi');
     }
 
     final tempDir = Directory.systemTemp;
@@ -185,43 +355,43 @@ class MessageHandler {
     return tempFile;
   }
 
-  /// Start the quiz after all configuration
+  /// Testni boshlash
   Future<void> _startQuiz(Context ctx, int userId, int timePerQuestion) async {
     final session = sessionManager.getSession(userId);
     if (session == null) return;
 
-    print('🚀 Starting quiz for user $userId');
+    print('🚀 Test boshlanmoqda: foydalanuvchi $userId');
 
-    // Apply configuration
     var quiz = session.quiz.copyWith(timePerQuestion: timePerQuestion);
 
     if (session.pendingShuffleChoice == true) {
-      print('🔀 Shuffling questions');
+      print('🔀 Savollar aralashtirilmoqda');
       quiz = quiz.shuffleQuestions();
     }
 
-    // Update session with configured quiz
     sessionManager.createSession(userId, quiz);
 
     await ctx.reply(
-      '🎯 Starting Quiz: ${quiz.subjectName}\n'
-          '📊 Questions: ${quiz.questions.length}\n'
-          '🔀 Shuffled: ${quiz.shuffled ? "Yes" : "No"}\n'
-          '⏱ Time per question: ${timePerQuestion > 0 ? "${timePerQuestion}s" : "No limit"}\n\n'
-          'Let\'s begin! 🚀',
+      '🎯 *Test boshlandi!*\n\n'
+          '📚 Fan: *${quiz.subjectName}*\n'
+          '📊 Savollar soni: *${quiz.questions.length} ta*\n'
+          '🔀 Aralashtirish: *${quiz.shuffled ? "Ha" : "Yo'q"}*\n'
+          '⏱ Har bir savol uchun: *${timePerQuestion > 0 ? "$timePerQuestion soniya" : "Cheksiz"}*\n\n'
+          '🚀 Omad tilaymiz!',
+      parseMode: ParseMode.markdown,
     );
 
-    // Send first question
+    await Future.delayed(Duration(milliseconds: 500));
     await _sendQuestion(ctx, userId);
   }
 
-  /// Truncate text to fit Telegram poll option length limit (100 chars)
+  /// Matnni qisqartirish
   String _truncateOption(String text, int maxLength) {
     if (text.length <= maxLength) return text;
     return '${text.substring(0, maxLength - 3)}...';
   }
 
-  /// Send current question as poll
+  /// Savolni yuborish
   Future<void> _sendQuestion(Context ctx, int userId) async {
     final session = sessionManager.getSession(userId);
     if (session == null || session.isCompleted) return;
@@ -229,12 +399,10 @@ class MessageHandler {
     final question = session.currentQuestion;
     final quiz = session.quiz;
 
-    print('📮 Sending question ${session.currentQuestionIndex + 1}/${quiz.questions.length}');
+    print('📮 Savol yuborilmoqda ${session.currentQuestionIndex + 1}/${quiz.questions.length}');
 
-    // Truncate question if too long (Telegram limit: 300 chars for question)
     final questionText = _truncateOption(question.text, 300);
 
-    // Convert options to InputPollOption format with length limit
     final pollOptions = question.options
         .map((opt) => InputPollOption(text: _truncateOption(opt, 100)))
         .toList()
@@ -250,7 +418,7 @@ class MessageHandler {
     );
   }
 
-  /// Handle callback queries (shuffle choice)
+  /// Callback so'rovlarini boshqarish
   Future<void> handleCallback(Context ctx) async {
     final query = ctx.callbackQuery;
     if (query == null) return;
@@ -258,18 +426,66 @@ class MessageHandler {
     final userId = query.from.id;
     final data = query.data;
 
+    // Shuffle tanlash
     if (data?.startsWith('shuffle:') == true) {
       final shuffle = data == 'shuffle:yes';
 
-      print('🔄 User $userId chose shuffle: $shuffle');
+      print('🔄 Foydalanuvchi $userId aralashtirish tanladi: $shuffle');
 
       sessionManager.setPendingShuffleChoice(userId, shuffle);
 
       await ctx.answerCallbackQuery();
       await ctx.editMessageText(
-        '${shuffle ? "🔀" : "📋"} Questions will ${shuffle ? "" : "not "}be shuffled.\n\n'
-            'Enter time per question in seconds (0 for no timer):',
+        '${shuffle ? "🔀" : "📋"} Savollar ${shuffle ? "aralashtiriladi" : "ketma-ketlikda beriladi"}.',
+        parseMode: ParseMode.markdown,
       );
+
+      // Vaqt tanlash tugmalarini ko'rsatish
+      await Future.delayed(Duration(milliseconds: 300));
+      await _showTimeSelection(ctx, userId);
+      return;
+    }
+
+    // Vaqt tanlash
+    if (data?.startsWith('time:') == true) {
+      final timeStr = data!.substring(5);
+      final time = int.tryParse(timeStr);
+
+      if (time == null) {
+        await ctx.answerCallbackQuery(text: '❌ Xatolik!');
+        return;
+      }
+
+      print('⏱ Foydalanuvchi $userId vaqtni tanladi: $time soniya');
+
+      await ctx.answerCallbackQuery(
+        text: time == 0 ? '♾ Cheksiz vaqt' : '⏱ $time soniya',
+      );
+
+      await ctx.editMessageText(
+        '⏱ Tanlangan vaqt: *${time == 0 ? "Cheksiz" : "$time soniya"}*\n\n'
+            '🚀 Test tayyorlanmoqda...',
+        parseMode: ParseMode.markdown,
+      );
+
+      await Future.delayed(Duration(milliseconds: 500));
+      await _startQuiz(ctx, userId, time);
+      return;
+    }
+
+    // Qaytadan boshlash
+    if (data == 'quiz_restart') {
+      final session = sessionManager.getSession(userId);
+      if (session != null) {
+        sessionManager.endSession(userId);
+        await ctx.answerCallbackQuery(text: '🔄 Sessiya tozalandi');
+        await ctx.editMessageText(
+          '🔄 *Sessiya tugadi!*\n\n'
+              '📚 Yangi test boshlash uchun: /start',
+          parseMode: ParseMode.markdown,
+        );
+      }
+      return;
     }
   }
 }

@@ -2,19 +2,19 @@ import 'package:televerse/telegram.dart';
 import 'package:televerse/televerse.dart';
 import '../services/quiz_session_manager.dart';
 
-/// Handles poll answers
+/// Poll javoblarini boshqaruvchi
 class PollAnswerHandler {
   final QuizSessionManager sessionManager;
 
   PollAnswerHandler(this.sessionManager);
 
-  /// Truncate text to fit Telegram poll option length limit (100 chars)
+  /// Matnni qisqartirish
   String _truncateOption(String text, int maxLength) {
     if (text.length <= maxLength) return text;
     return '${text.substring(0, maxLength - 3)}...';
   }
 
-  /// Handle poll answer
+  /// Poll javobini boshqarish
   Future<void> handlePollAnswer(Context ctx) async {
     final pollAnswer = ctx.pollAnswer;
     if (pollAnswer == null) return;
@@ -24,7 +24,6 @@ class PollAnswerHandler {
 
     if (session == null || session.isCompleted) return;
 
-    // Check if answer is correct
     final question = session.currentQuestion;
     final isCorrect = pollAnswer.optionIds.contains(question.correctOptionIndex);
 
@@ -34,26 +33,25 @@ class PollAnswerHandler {
       sessionManager.recordWrongAnswer(userId);
     }
 
-    // Move to next question
     sessionManager.nextQuestion(userId);
 
-    // Check if quiz is completed
+    // Test tugaganmi?
     if (session.isCompleted) {
       await _sendResults(ctx, userId);
       return;
     }
 
-    // Check if user exceeded missed question limit
+    // Juda ko'p xato qildimi?
     if (sessionManager.hasExceededMissedLimit(userId)) {
       await _handleMissedLimit(ctx, userId);
       return;
     }
 
-    // Send next question
+    // Keyingi savolni yuborish
     await _sendNextQuestion(ctx, userId);
   }
 
-  /// Handle case when user missed too many questions
+  /// Juda ko'p xato qilingan holat
   Future<void> _handleMissedLimit(Context ctx, int userId) async {
     final session = sessionManager.getSession(userId);
     if (session == null) return;
@@ -64,21 +62,22 @@ class PollAnswerHandler {
 
     await ctx.api.sendMessage(
       ChatID(userId),
-      '⏸ Quiz Paused!\n\n'
-          'You missed $missedCount questions in a row.\n'
-          'Current progress: $currentQuestion/$totalQuestions\n\n'
-          'What would you like to do?',
+      '⏸ *Test to\'xtatildi!*\n\n'
+          '❌ Siz ketma-ket *$missedCount ta* savolga javob bermadingiz.\n\n'
+          '📊 Hozirgi o\'rin: *$currentQuestion/$totalQuestions*\n\n'
+          '🤔 Nima qilmoqchisiz?',
+      parseMode: ParseMode.markdown,
       replyMarkup: InlineKeyboard(
         inlineKeyboard: [
           [
             InlineKeyboardButton(
-              text: '▶️ Continue Quiz',
+              text: '▶️ Testni davom ettirish',
               callbackData: 'quiz_continue',
             ),
           ],
           [
             InlineKeyboardButton(
-              text: '🏁 Finish & See Results',
+              text: '🏁 Yakunlash va natijani ko\'rish',
               callbackData: 'quiz_finish',
             ),
           ],
@@ -87,7 +86,7 @@ class PollAnswerHandler {
     );
   }
 
-  /// Handle continue/finish callback
+  /// Davom ettirish/tugatish boshqaruvi
   Future<void> handleQuizControl(Context ctx) async {
     final query = ctx.callbackQuery;
     if (query == null) return;
@@ -96,22 +95,31 @@ class PollAnswerHandler {
     final data = query.data;
 
     if (data == 'quiz_continue') {
-      // Reset missed count and continue
       sessionManager.resetMissedCount(userId);
 
-      await ctx.answerCallbackQuery(text: 'Continuing quiz...');
-      await ctx.editMessageText('▶️ Continuing quiz...');
+      await ctx.answerCallbackQuery(text: 'Test davom ettirilmoqda...');
+      await ctx.editMessageText(
+        '▶️ *Test davom ettirilmoqda...*\n\n'
+            '💪 Omad tilaymiz!',
+        parseMode: ParseMode.markdown,
+      );
 
+      await Future.delayed(Duration(milliseconds: 500));
       await _sendNextQuestion(ctx, userId);
-    } else if (data == 'quiz_finish') {
-      await ctx.answerCallbackQuery(text: 'Finishing quiz...');
-      await ctx.editMessageText('🏁 Finishing quiz...');
 
+    } else if (data == 'quiz_finish') {
+      await ctx.answerCallbackQuery(text: 'Test yakunlanmoqda...');
+      await ctx.editMessageText(
+        '🏁 *Test yakunlanmoqda...*',
+        parseMode: ParseMode.markdown,
+      );
+
+      await Future.delayed(Duration(milliseconds: 500));
       await _sendResults(ctx, userId);
     }
   }
 
-  /// Send next question
+  /// Keyingi savolni yuborish
   Future<void> _sendNextQuestion(Context ctx, int userId) async {
     final session = sessionManager.getSession(userId);
     if (session == null || session.isCompleted) return;
@@ -119,10 +127,8 @@ class PollAnswerHandler {
     final question = session.currentQuestion;
     final quiz = session.quiz;
 
-    // Truncate question if too long (Telegram limit: 300 chars for question)
     final questionText = _truncateOption(question.text, 300);
 
-    // Convert options to InputPollOption format with length limit
     final pollOptions = question.options
         .map((opt) => InputPollOption(text: _truncateOption(opt, 100)))
         .toList()
@@ -138,11 +144,10 @@ class PollAnswerHandler {
       openPeriod: quiz.timePerQuestion > 0 ? quiz.timePerQuestion : null,
     );
 
-    // Track poll for timeout
     sessionManager.updatePollId(userId, pollMessage.poll!.id);
   }
 
-  /// Send final results
+  /// Yakuniy natijalarni yuborish
   Future<void> _sendResults(Context ctx, int userId) async {
     final session = sessionManager.endSession(userId);
     if (session == null) return;
@@ -155,42 +160,59 @@ class PollAnswerHandler {
 
     String emoji;
     String message;
+    String level;
 
     if (percentage >= 90) {
       emoji = '🏆';
-      message = 'Outstanding!';
+      message = 'A\'lo!';
+      level = 'Mukammal natija!';
     } else if (percentage >= 75) {
       emoji = '🌟';
-      message = 'Great job!';
+      message = 'Yaxshi!';
+      level = 'Juda yaxshi bilasiz!';
     } else if (percentage >= 60) {
       emoji = '👍';
-      message = 'Good work!';
+      message = 'Yaxshi!';
+      level = 'Yaxshi natija!';
     } else if (percentage >= 50) {
       emoji = '📚';
-      message = 'Keep practicing!';
+      message = 'Qoniqarli';
+      level = 'Yana mashq qiling!';
     } else {
       emoji = '💪';
-      message = 'Don\'t give up!';
+      message = 'Yaxshiroq bo\'ladi!';
+      level = 'Tayyorgarlik ko\'ring!';
     }
 
     final minutes = elapsed.inMinutes;
     final seconds = elapsed.inSeconds % 60;
 
     final completionStatus = answeredQuestions == total
-        ? '✅ Quiz Completed!'
-        : '🏁 Quiz Finished Early!';
+        ? '✅ Test yakunlandi!'
+        : '🏁 Test to\'xtatildi!';
+
+    // Baho hisobini aniqlash (5 ball tizimida)
+    final gradeValue = (percentage / 20).floorToDouble();
+    final grade = gradeValue >= 4.5 ? '5' :
+    gradeValue >= 3.5 ? '4' :
+    gradeValue >= 2.5 ? '3' : '2';
 
     await ctx.api.sendMessage(
       ChatID(userId),
-      '$emoji $completionStatus\n\n'
-          '📊 Results:\n'
-          '✅ Correct: $score/$answeredQuestions\n'
-          '📈 Score: ${percentage.toStringAsFixed(1)}%\n'
-          '⏱ Time: ${minutes}m ${seconds}s\n'
-          '${answeredQuestions < total ? "📝 Answered: $answeredQuestions/$total questions\n" : ""}'
-          '${session.quiz.subjectName != null ? "📚 Subject: ${session.quiz.subjectName}\n" : ""}'
-          '\n$message\n\n'
-          'Send /start to take another quiz!',
+      '$emoji *$completionStatus*\n\n'
+          '━━━━━━━━━━━━━━━━━\n'
+          '📊 *NATIJALAR*\n'
+          '━━━━━━━━━━━━━━━━━\n\n'
+          '✅ To\'g\'ri javoblar: *$score/$answeredQuestions*\n'
+          '📈 Foiz: *${percentage.toStringAsFixed(1)}%*\n'
+          '🎯 Baho: *$grade*\n'
+          '⏱ Sarflangan vaqt: *${minutes}d ${seconds}s*\n'
+          '${answeredQuestions < total ? "📝 Javob berilgan: *$answeredQuestions/$total*\n" : ""}'
+          '${session.quiz.subjectName != null ? "📚 Fan: *${session.quiz.subjectName}*\n" : ""}'
+          '\n━━━━━━━━━━━━━━━━━\n'
+          '$message $level\n\n'
+          '🔄 Yangi test uchun: /start',
+      parseMode: ParseMode.markdown,
     );
   }
 }

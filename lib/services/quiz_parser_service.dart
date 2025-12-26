@@ -14,44 +14,55 @@ class QuizParserService {
     final questions = _parseQuestions(normalizedText);
 
     if (questions.isEmpty) {
-      throw FormatException('No valid questions found in the text');
+      throw FormatException('Faylda to\'g\'ri formatdagi savollar topilmadi.\n\n'
+          'Format:\n'
+          '+++++ Savol matni\n'
+          '===== Variant 1\n'
+          '===== #To\'g\'ri javob\n'
+          '===== Variant 3\n');
     }
 
-    print('✅ Successfully parsed ${questions.length} questions');
+    print('✅ Muvaffaqiyatli parse qilindi: ${questions.length} ta savol');
     return Quiz(questions: questions);
   }
 
-  /// Parse questions using state machine approach
+  /// Parse questions using improved state machine approach
   List<Question> _parseQuestions(String text) {
     final questions = <Question>[];
-    final lines = text.split('\n').map((line) => line.trim()).where((line) => line.isNotEmpty).toList();
+    final lines = text.split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList();
+
+    print('📊 Jami qatorlar: ${lines.length}');
 
     String? currentQuestionText;
-    String? currentQuestionHint; // For inline correct answer hints
+    String? currentQuestionHint;
     final currentOptions = <String>[];
     int? correctOptionIndex;
+    bool expectingQuestionText = false;
+    bool expectingOption = false;
 
     void finalizeQuestion() {
       if (currentQuestionText != null && currentOptions.length >= 2) {
-        // If no correct answer was explicitly marked, try to use the hint
-        if (correctOptionIndex == null && currentQuestionHint != null) {
-          correctOptionIndex = normalizer.parseCorrectAnswerFromHint(
-            currentQuestionHint!,
-            currentOptions.length,
-          );
 
-          if (correctOptionIndex != null) {
-            print('📌 Using hint to set correct answer: option ${correctOptionIndex! + 1}');
-          }
-        }
-
-        // Validate exactly one correct answer
+        // MUHIM: Agar hech qanday to'g'ri javob belgilanmagan bo'lsa,
+        // birinchi variantni to'g'ri deb belgilash
         if (correctOptionIndex == null) {
-          print('⚠️ Skipping question (no correct answer): ${currentQuestionText!.substring(0, currentQuestionText!.length > 50 ? 50 : currentQuestionText!.length)}...');
-          currentQuestionText = null;
-          currentQuestionHint = null;
-          currentOptions.clear();
-          return;
+          // Hint dan topishga harakat
+          if (currentQuestionHint != null) {
+            correctOptionIndex = normalizer.parseCorrectAnswerFromHint(
+              currentQuestionHint!,
+              currentOptions.length,
+            );
+          }
+
+          // Hali ham topilmasa, birinchi variantni tanlash
+          if (correctOptionIndex == null) {
+            print('⚠️ To\'g\'ri javob topilmadi, birinchi variantni tanlaymiz: '
+                '${currentQuestionText!.substring(0, currentQuestionText!.length > 50 ? 50 : currentQuestionText!.length)}...');
+            correctOptionIndex = 0;
+          }
         }
 
         final question = Question(
@@ -62,7 +73,9 @@ class QuizParserService {
 
         if (question.isValid()) {
           questions.add(question);
-          print('📝 Question ${questions.length}: ${currentQuestionText!.substring(0, currentQuestionText!.length > 50 ? 50 : currentQuestionText!.length)}...');
+          print('📝 Savol ${questions.length}: ${currentQuestionText!.substring(0, currentQuestionText!.length > 50 ? 50 : currentQuestionText!.length)}... [To\'g\'ri: ${correctOptionIndex! + 1}]');
+        } else {
+          print('⚠️ Noto\'g\'ri savol e\'tiborsiz qoldirildi');
         }
       }
 
@@ -71,127 +84,101 @@ class QuizParserService {
       currentQuestionHint = null;
       currentOptions.clear();
       correctOptionIndex = null;
+      expectingQuestionText = false;
+      expectingOption = false;
     }
 
     for (var i = 0; i < lines.length; i++) {
       final line = lines[i];
 
-      // Skip PDF noise early
-      if (_isPdfNoise(line)) {
+      // Skip empty and noise
+      if (line.isEmpty || _isNoise(line)) {
         continue;
       }
 
-      // STATE 1: New question token
+      // STATE 1: Question token detected
       if (line == QuizTextNormalizer.questionToken) {
-        // Finalize previous question if exists
         finalizeQuestion();
-
-        // Next non-empty, non-token line is question text
-        for (var j = i + 1; j < lines.length; j++) {
-          final nextLine = lines[j];
-          if (nextLine.isEmpty || _isPdfNoise(nextLine)) continue;
-          if (_isToken(nextLine)) break;
-
-          // Check if question has inline hint
-          final (cleanQuestion, hint) = normalizer.extractCorrectAnswerHint(nextLine);
-          currentQuestionText = cleanQuestion;
-          currentQuestionHint = hint;
-
-          i = j; // Skip to this line
-          break;
-        }
+        expectingQuestionText = true;
+        expectingOption = false;
         continue;
       }
 
-      // STATE 2: Option token
+      // STATE 2: Option token detected
       if (line == QuizTextNormalizer.optionToken) {
-        // Next non-empty, non-token line is option text
-        for (var j = i + 1; j < lines.length; j++) {
-          final nextLine = lines[j];
-          if (nextLine.isEmpty || _isPdfNoise(nextLine)) continue;
-          if (_isToken(nextLine)) break;
-
-          // Check if this option has correct marker
-          bool isCorrect = false;
-          String optionText = nextLine;
-
-          if (nextLine.startsWith(QuizTextNormalizer.correctMarker)) {
-            isCorrect = true;
-            optionText = nextLine.substring(1).trim();
-          }
-
-          if (optionText.isNotEmpty && !_isPdfNoise(optionText)) {
-            if (isCorrect) {
-              // Only set correct index if not already set (avoid multiple correct answers)
-              if (correctOptionIndex == null) {
-                correctOptionIndex = currentOptions.length;
-              } else {
-                print('⚠️ Multiple correct answers detected, using first one');
-              }
-            }
-            currentOptions.add(optionText);
-          }
-
-          i = j; // Skip to this line
-          break;
-        }
+        expectingOption = true;
+        expectingQuestionText = false;
         continue;
       }
 
-      // STATE 3: Correct marker (standalone)
-      if (line == QuizTextNormalizer.correctMarker) {
-        // Next non-empty, non-token line is the correct option
-        for (var j = i + 1; j < lines.length; j++) {
-          final nextLine = lines[j];
-          if (nextLine.isEmpty || _isPdfNoise(nextLine)) continue;
-          if (_isToken(nextLine)) break;
-
-          // Only set correct index if not already set
-          if (correctOptionIndex == null) {
-            correctOptionIndex = currentOptions.length;
-          } else {
-            print('⚠️ Multiple correct answers detected, using first one');
-          }
-          currentOptions.add(nextLine);
-
-          i = j; // Skip to this line
-          break;
-        }
-        continue;
-      }
-
-      // STATE 4: Handle lines that start with # (correct marker inline)
-      if (line.startsWith(QuizTextNormalizer.correctMarker) &&
-          line != QuizTextNormalizer.correctMarker) {
+      // STATE 3: Correct marker (standalone or inline)
+      if (line.startsWith(QuizTextNormalizer.correctMarker)) {
         final optionText = line.substring(1).trim();
-        if (optionText.isNotEmpty && !_isPdfNoise(optionText)) {
-          // Only set correct index if not already set
+
+        if (optionText.isNotEmpty && !_isNoise(optionText)) {
           if (correctOptionIndex == null) {
             correctOptionIndex = currentOptions.length;
           } else {
-            print('⚠️ Multiple correct answers detected, using first one');
+            print('⚠️ Bir nechta to\'g\'ri javob topildi, birinchisini ishlatamiz');
           }
           currentOptions.add(optionText);
         }
+        expectingOption = false;
         continue;
       }
 
-      // STATE 5: Regular text (could be question or option depending on context)
-      // If no question yet and no options, treat as question (but not if it's a token)
-      if (currentQuestionText == null &&
-          currentOptions.isEmpty &&
-          !_isPdfNoise(line) &&
-          !_isToken(line)) {
-        // Check if it has inline hint
-        final (cleanQuestion, hint) = normalizer.extractCorrectAnswerHint(line);
-        currentQuestionText = cleanQuestion;
-        currentQuestionHint = hint;
+      // STATE 4: Expecting question text
+      if (expectingQuestionText && currentQuestionText == null) {
+        if (!_isToken(line) && !_isNoise(line)) {
+          final (cleanQuestion, hint) = normalizer.extractCorrectAnswerHint(line);
+          currentQuestionText = cleanQuestion;
+          currentQuestionHint = hint;
+          expectingQuestionText = false;
+        }
+        continue;
+      }
+
+      // STATE 5: Expecting option text
+      if (expectingOption) {
+        if (!_isToken(line) && !_isNoise(line)) {
+          currentOptions.add(line);
+          expectingOption = false;
+        }
+        continue;
+      }
+
+      // STATE 6: Heuristic - if we have a question but no options yet,
+      // and this line looks like an option, treat it as one
+      if (currentQuestionText != null && currentOptions.isEmpty) {
+        if (!_isToken(line) && !_isNoise(line) && line.length < 200) {
+          currentOptions.add(line);
+        }
+        continue;
+      }
+
+      // STATE 7: Continue adding options if we're in a question
+      if (currentQuestionText != null && currentOptions.isNotEmpty) {
+        if (!_isToken(line) && !_isNoise(line) && currentOptions.length < 6) {
+          currentOptions.add(line);
+        }
+        continue;
+      }
+
+      // STATE 8: Start new question if we see question-like text
+      if (currentQuestionText == null && !_isToken(line) && !_isNoise(line)) {
+        // Check if it looks like a question
+        if (line.contains('?') || line.length > 20) {
+          final (cleanQuestion, hint) = normalizer.extractCorrectAnswerHint(line);
+          currentQuestionText = cleanQuestion;
+          currentQuestionHint = hint;
+        }
       }
     }
 
     // Finalize last question
     finalizeQuestion();
 
+    print('✅ Jami topilgan savollar: ${questions.length}');
     return questions;
   }
 
@@ -202,39 +189,40 @@ class QuizParserService {
         line == QuizTextNormalizer.correctMarker;
   }
 
-  /// Check if a line is PDF noise/metadata
-  bool _isPdfNoise(String line) {
-    // Very basic check - only filter obvious PDF markers
-    if (line.startsWith('%PDF')) return true;
-    if (line.startsWith('<<') && line.endsWith('>>')) return true;
-    if (line == 'obj' || line == 'endobj') return true;
-    if (line.startsWith('/Type') || line.startsWith('/Filter')) return true;
-    if (line.startsWith('/') && line.contains('0 R')) return true;
+  /// Check if a line is noise/metadata
+  bool _isNoise(String line) {
+    // Very short lines
+    if (line.length < 2) return true;
 
-    // Filter very long lines (likely binary)
-    if (line.length > 300) return true;
+    // Lines with only special characters
+    if (RegExp(r'^[\s\-_\.\,\:\;\!\?\(\)\[\]\{\}]+$').hasMatch(line)) return true;
 
-    // Filter lines with lots of non-printable characters
+    // Lines with lots of numbers and spaces (likely metadata)
+    final digitsAndSpaces = line.codeUnits.where((c) =>
+    (c >= 48 && c <= 57) || c == 32).length;
+    if (digitsAndSpaces > line.length * 0.7 && line.length > 10) return true;
+
+    // Lines with lots of non-printable characters
     final nonPrintable = line.codeUnits.where((c) => c < 32 || c > 126).length;
     if (nonPrintable > line.length * 0.3) return true;
 
-    // Filter lines that are mostly numbers and spaces (PDF metadata)
-    final digitsAndSpaces = line.codeUnits.where((c) =>
-    (c >= 48 && c <= 57) || c == 32).length;
-    if (digitsAndSpaces > line.length * 0.8 && line.length > 20) return true;
+    // Very long lines (likely binary data)
+    if (line.length > 500) return true;
 
     return false;
   }
 
   /// Parse quiz with automatic normalization
   Quiz parseRawText(String rawText) {
-    print('📄 Raw text length: ${rawText.length} characters');
-    final normalized = normalizer.normalizeQuizText(rawText);
-    print('📄 Normalized text length: ${normalized.length} characters');
+    print('📄 Xom matn uzunligi: ${rawText.length} belgi');
 
-    // Debug: Print first 500 characters of normalized text
-    final preview = normalized.substring(0, normalized.length > 500 ? 500 : normalized.length);
-    print('📄 Preview of normalized text:\n$preview\n---');
+    final normalized = normalizer.normalizeQuizText(rawText);
+    print('📄 Normallashtirilgan matn: ${normalized.length} belgi');
+
+    // Debug: Print first 1000 characters
+    final preview = normalized.substring(
+        0, normalized.length > 1000 ? 1000 : normalized.length);
+    print('📄 Ko\'rinish:\n$preview\n---');
 
     return parseQuiz(normalized);
   }

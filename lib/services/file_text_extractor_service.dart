@@ -2,12 +2,12 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:archive/archive.dart';
 import 'package:path/path.dart' as path;
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
+import 'package:xml/xml.dart' as xml;
 
-/// Service for extracting text from various file formats
+/// Turli fayl formatlaridan matn ajratib oluvchi yaxshilangan servis
+/// PDF qo'llab-quvvatlanmaydi - faqat DOCX, DOC, TXT
 class FileTextExtractorService {
-  /// Extract text from a file based on its extension
+  /// Fayl kengaytmasiga qarab matn ajratish
   Future<String> extractText(File file) async {
     final extension = path.extension(file.path).toLowerCase();
 
@@ -15,152 +15,228 @@ class FileTextExtractorService {
       switch (extension) {
         case '.txt':
           return await _extractFromTxt(file);
-        case '.pdf':
-          return await _extractFromPdf(file);
         case '.doc':
         case '.docx':
           return await _extractFromDocx(file);
         default:
-          throw UnsupportedError('Unsupported file type: $extension');
+          throw UnsupportedError('Qo\'llab-quvvatlanmaydigan fayl turi: $extension\n\n'
+              '📄 Faqat quyidagi formatlar qo\'llab-quvvatlanadi:\n'
+              '   • DOCX (tavsiya etiladi) ✅\n'
+              '   • DOC\n'
+              '   • TXT');
       }
     } catch (e) {
-      throw Exception('Failed to extract text from file: $e');
+      throw Exception('Fayldan matn ajratishda xatolik: $e');
     }
   }
 
-  /// Extract text from TXT file
+  /// TXT fayldan matn ajratish
   Future<String> _extractFromTxt(File file) async {
-    print('📖 Reading TXT file...');
-    final text = await file.readAsString();
-    print('📖 TXT file read: ${text.length} characters');
-    return text;
-  }
+    print('📖 TXT fayl o\'qilmoqda...');
 
-  /// Extract text from PDF file - Simple approach
-  Future<String> _extractFromPdf(File file) async {
-    print('📖 Reading PDF file...');
-    print('⚠️ PDF matn ajratish cheklangan. TXT yoki DOCX format tavsiya etiladi.');
+    // Turli kodlashlarni sinab ko'rish
+    final List<Encoding> encodings = [
+      utf8,
+      latin1,
+      Encoding.getByName('windows-1251') ?? latin1,
+      Encoding.getByName('cp866') ?? latin1,
+      Encoding.getByName('koi8-r') ?? latin1,
+    ];
 
-    try {
-      final bytes = await file.readAsBytes();
-      print('📖 PDF file size: ${bytes.length} bytes');
-
-      // Try to extract text using simple string search
-      // This works for simple, uncompressed PDFs
-      String rawText = latin1.decode(bytes, allowInvalid: true);
-
-      // Look for text streams in PDF
-      final streamPattern = RegExp(r'stream\s*(.*?)\s*endstream', dotAll: true);
-      final matches = streamPattern.allMatches(rawText);
-
-      final buffer = StringBuffer();
-      for (final match in matches) {
-        final streamContent = match.group(1) ?? '';
-        // Try to extract readable text
-        final readable = streamContent.replaceAll(RegExp(r'[^\x20-\x7E\n\r]+'), ' ');
-        if (readable.length > 10) {
-          buffer.write(readable);
-          buffer.write('\n');
+    for (final encoding in encodings) {
+      try {
+        final text = await file.readAsString(encoding: encoding);
+        if (text.isNotEmpty) {
+          print('📖 TXT fayl o\'qildi (${encoding.name}): ${text.length} belgi');
+          return text;
         }
+      } catch (e) {
+        continue;
       }
-
-      String result = buffer.toString();
-
-      // If no streams found, try direct text extraction
-      if (result.isEmpty || result.length < 100) {
-        print('⚠️ Stream extraction failed, trying direct extraction...');
-        result = rawText.replaceAll(RegExp(r'[^\x20-\x7E\n\r]+'), ' ');
-      }
-
-      // Clean up
-      result = result.replaceAll(RegExp(r'\s+'), ' ');
-      result = result.replaceAll(RegExp(r'[<>(){}\[\]\/\\]'), '');
-
-      print('📖 PDF extracted: ${result.length} characters');
-
-      // Check for quiz markers
-      final hasTokens = _checkForTokens(result);
-      print('📊 Token check: $hasTokens');
-
-      if (!hasTokens['any']!) {
-        throw Exception(
-            '❌ PDF formatdan matn ajratib bo\'lmadi.\n\n'
-                '📝 Iltimos, faylni quyidagi formatlarda yuboring:\n'
-                '   • TXT format (.txt) - eng yaxshi variant\n'
-                '   • DOCX format (.docx) - ishonchli\n\n'
-                '🔄 PDF ni TXT ga o\'girish:\n'
-                '1. PDF ni Word da oching (yoki Adobe Reader)\n'
-                '2. "Save As" → "Plain Text (.txt)" tanlang\n'
-                '3. Saqlang va qayta yuboring'
-        );
-      }
-
-      return result;
-
-    } catch (e) {
-      if (e.toString().contains('PDF formatdan')) {
-        rethrow;
-      }
-      throw Exception(
-          '❌ PDF ishlov berishda xatolik: $e\n\n'
-              '💡 Yechim: Faylni TXT yoki DOCX formatda saqlang va qayta yuboring.'
-      );
     }
+
+    throw Exception('TXT faylni hech qanday kodlashda o\'qib bo\'lmadi');
   }
 
-  /// Check for presence of quiz tokens
-  Map<String, bool> _checkForTokens(String text) {
-    final hasQuestion = text.contains('+++++') || text.contains('+ + + + +');
-    final hasOption = text.contains('=====') || text.contains('= = = = =');
-    final hasCorrect = text.contains('#');
-
-    return {
-      'question': hasQuestion,
-      'option': hasOption,
-      'correct': hasCorrect,
-      'any': hasQuestion || hasOption || hasCorrect,
-    };
-  }
-
-  /// Extract text from DOCX file using archive package
+  /// DOCX fayldan matn ajratish - to'liq yaxshilangan usul
   Future<String> _extractFromDocx(File file) async {
-    print('📖 Reading DOCX file...');
+    print('📖 DOCX fayl o\'qilmoqda...');
+
     try {
       final bytes = await file.readAsBytes();
+      print('📖 DOCX fayl hajmi: ${bytes.length} bayt');
+
+      // ZIP arxivini ochish
       final archive = ZipDecoder().decodeBytes(bytes);
 
-      // Find document.xml which contains the text
-      final documentXml = archive.findFile('word/document.xml');
-
-      if (documentXml == null) {
-        throw Exception('Invalid DOCX file structure');
+      // Asosiy dokument faylini topish
+      final documentFile = archive.findFile('word/document.xml');
+      if (documentFile == null) {
+        throw Exception('DOCX fayl strukturasi noto\'g\'ri: word/document.xml topilmadi');
       }
 
-      final content = String.fromCharCodes(documentXml.content as List<int>);
+      // XML ni o'qish
+      final xmlContent = utf8.decode(documentFile.content as List<int>);
 
-      // Extract text between <w:t> tags
-      final textPattern = RegExp(r'<w:t[^>]*>([^<]*)</w:t>');
-      final matches = textPattern.allMatches(content);
+      // XML ni parse qilish
+      final document = xml.XmlDocument.parse(xmlContent);
 
+      // Barcha matn elementlarini yig'ish - YANGILANGAN USUL
       final buffer = StringBuffer();
-      for (final match in matches) {
-        if (match.group(1) != null) {
-          buffer.write(match.group(1));
-          buffer.write(' ');
+
+      // <w:p> (paragraph) elementlarini qidirish
+      final paragraphs = document.findAllElements('w:p');
+
+      print('📖 Topilgan paragraflar: ${paragraphs.length}');
+
+      for (final paragraph in paragraphs) {
+        final paragraphText = _extractTextFromParagraph(paragraph);
+        if (paragraphText.isNotEmpty) {
+          buffer.writeln(paragraphText);
         }
       }
 
-      final result = buffer.toString().trim();
-      print('📖 DOCX extracted: ${result.length} characters');
+      String result = buffer.toString().trim();
+
+      // Agar paragraflar bo'yicha kam matn topilsa, alternativ usul
+      if (result.length < 500 || !_containsQuizFormat(result)) {
+        print('📖 Asosiy usul kam natija berdi, qo\'shimcha usullarni ishlatamiz...');
+        final alternativeResult = _extractAllTextElements(document);
+
+        // Eng yaxshi natijani tanlash
+        if (alternativeResult.length > result.length) {
+          result = alternativeResult;
+        }
+      }
+
+      print('📖 DOCX\'dan ajratildi: ${result.length} belgi');
+
+      if (result.isEmpty) {
+        throw Exception('DOCX fayldan matn ajratib bo\'lmadi');
+      }
+
+      // Test formatini tekshirish
+      if (!_containsQuizFormat(result)) {
+        print('⚠️ Ogohlik: DOCX faylda HEMIS test formati aniq emas');
+      }
+
       return result;
+
     } catch (e) {
-      throw Exception('Failed to parse DOCX: $e');
+      print('❌ DOCX xatolik: $e');
+      throw Exception('DOCX faylni tahlil qilishda xatolik: ${e.toString()}');
     }
   }
 
-  /// Check if file type is supported
+  /// Paragrafdan matn ajratish - yaxshilangan
+  String _extractTextFromParagraph(xml.XmlElement paragraph) {
+    final buffer = StringBuffer();
+
+    // Barcha <w:t> elementlarini topish
+    final textElements = paragraph.findAllElements('w:t');
+
+    for (final textElement in textElements) {
+      final text = textElement.innerText;
+      if (text.isNotEmpty) {
+        buffer.write(text);
+      }
+    }
+
+    // Barcha <w:tab/> elementlarini bo'sh joy bilan almashtirish
+    if (paragraph.findElements('w:tab').isNotEmpty) {
+      buffer.write(' ');
+    }
+
+    return buffer.toString().trim();
+  }
+
+  /// Barcha matn elementlarini ajratish - to'liq usul
+  String _extractAllTextElements(xml.XmlDocument document) {
+    final buffer = StringBuffer();
+    final lines = <String>[];
+
+    // Barcha paragraflarni qayta ishlash
+    final paragraphs = document.findAllElements('w:p');
+
+    for (final paragraph in paragraphs) {
+      final lineBuffer = StringBuffer();
+
+      // Paragraf ichidagi barcha runs (w:r)
+      final runs = paragraph.findElements('w:r');
+
+      for (final run in runs) {
+        // Har bir run ichidagi matn
+        final textElements = run.findElements('w:t');
+        for (final textElement in textElements) {
+          final text = textElement.innerText.trim();
+          if (text.isNotEmpty) {
+            lineBuffer.write(text);
+          }
+        }
+
+        // Tab va boshqa bo'sh joylar
+        if (run.findElements('w:tab').isNotEmpty) {
+          lineBuffer.write(' ');
+        }
+      }
+
+      final line = lineBuffer.toString().trim();
+      if (line.isNotEmpty) {
+        lines.add(line);
+      }
+    }
+
+    // Barcha qatorlarni birlashtirish
+    return lines.join('\n');
+  }
+
+  /// Matnda test formati borligini tekshirish
+  bool _containsQuizFormat(String text) {
+    if (text.length < 100) return false;
+
+    // HEMIS test formatini qidirish
+    final patterns = [
+      RegExp(r'\+{4,5}'),  // ++++ yoki +++++
+      RegExp(r'={4,5}'),   // ==== yoki =====
+      RegExp(r'#'),        // To'g'ri javob belgisi
+      RegExp(r'\?'),       // Savol belgisi
+      RegExp(r'[A-Da-d][\)\.]'), // Variantlar: A) B) C) D) yoki A. B. C. D.
+    ];
+
+    int matches = 0;
+    for (final pattern in patterns) {
+      if (pattern.hasMatch(text)) {
+        matches++;
+      }
+    }
+
+    return matches >= 2;
+  }
+
+  /// Fayl turi qo'llab-quvvatlanadimi
   bool isSupportedFileType(String filename) {
     final extension = path.extension(filename).toLowerCase();
-    return ['.txt', '.pdf', '.doc', '.docx'].contains(extension);
+    return ['.txt', '.doc', '.docx'].contains(extension);
+  }
+
+  /// Savollar sonini taxminiy hisoblash
+  int countQuestions(String text) {
+    if (text.isEmpty) return 0;
+
+    // HEMIS formatidagi savol ajratuvchilari
+    final questionSeparators = [
+      RegExp(r'\+{4,5}'),
+      RegExp(r'\n\s*\n'), // Bo'sh qatorlar
+    ];
+
+    int maxCount = 0;
+    for (final separator in questionSeparators) {
+      final count = separator.allMatches(text).length;
+      if (count > maxCount) {
+        maxCount = count;
+      }
+    }
+
+    return maxCount;
   }
 }
