@@ -1,30 +1,37 @@
 import 'dart:io';
 import '../bot.dart';
-import 'package:dotenv/dotenv.dart';
 
-void main(List<String> arguments) async {
- // var env = DotEnv()..load();
-
+Future<void> main(List<String> arguments) async {
+  // Globe’da Environment Variables orqali tokenni oling
   final token = Platform.environment['BOT_TOKEN'];
+
   if (token == null || token.isEmpty) {
     print('❌ Error: BOT_TOKEN environment variable not set');
-    print('💡 Usage: BOT_TOKEN=your_token_here dart run');
+    print('💡 Add BOT_TOKEN in Globe Environment Variables');
     exit(1);
   }
 
   final bot = QuizBot(token);
 
-  // Handle graceful shutdown
-  ProcessSignal.sigint.watch().listen((signal) async {
-    print('\n⚠️  Received SIGINT, shutting down...');
-    await bot.stop();
-    exit(0);
-  });
+  // Polling bot ishga tushadi
+  print('🤖 Starting Quiz Bot...');
 
   try {
     await bot.start();
+   // print('✅ Bot started: ${bot.username}');
   } catch (e) {
     print('❌ Fatal error: $e');
     exit(1);
   }
+
+  // Graceful shutdown handler
+  ProcessSignal.sigint.watch().listen((signal) async {
+    print('\n⚠️ SIGINT received, stopping bot...');
+    await bot.stop();
+    exit(0);
+  });
+
+  // Globe Worker-da forever running loop
+  // Polling bot shu yerda ishlayveradi
+  await Future<void>.delayed(Duration(days: 365));
 }
