@@ -13,53 +13,96 @@ class QuizBot {
   late final UpdateHandler _updateHandler;
 
   QuizBot(String token) {
+    print('🔧 [Bot] Creating Bot instance...');
+
     // POLLING rejimini aniq belgilash
     _bot = Bot(
       token,
-      fetcher: LongPolling(), // Bu juda muhim!
+      fetcher: LongPolling(
+        limit: 100,
+        timeout: 30,
+        allowedUpdates: [
+          UpdateType.message,
+          UpdateType.callbackQuery,
+          UpdateType.pollAnswer,
+        ],
+      ),
     );
+
+    print('✅ [Bot] Bot instance created with LongPolling');
 
     _quizService = QuizService();
     _sessionManager = QuizSessionManager();
+    print('✅ [Bot] Services initialized');
 
     // Initialize handlers
     final messageHandler = MessageHandler(_quizService, _sessionManager);
     final pollAnswerHandler = PollAnswerHandler(_sessionManager);
     _updateHandler = UpdateHandler(messageHandler, pollAnswerHandler);
+    print('✅ [Bot] Handlers created');
 
     // Setup handlers
     _updateHandler.setupHandlers(_bot);
+    print('✅ [Bot] Handlers registered to bot');
+
+    // Global error handler with logging
+    _bot.onError((BotError err) {
+      print('❌ [Bot] Error occurred:');
+      print('   Type: ${err.error.runtimeType}');
+      print('   Message: ${err.error}');
+      if (err.stackTrace != null) {
+        print('   Stack: ${err.stackTrace}');
+      }
+    });
+
+    print('✅ [Bot] Error handler registered');
   }
 
   /// Start the bot
   Future<void> start() async {
-    print('🤖 Quiz Bot starting...');
+    print('🤖 [Bot] Starting bot polling...');
 
     try {
+      // Test connection first
+      print('🔍 [Bot] Testing connection to Telegram...');
       final me = await _bot.getMe();
-      print('✅ Bot started: @${me.username}');
-      print('📊 Active sessions: ${_sessionManager.sessionCount}');
+      print('✅ [Bot] Connected successfully!');
+      print('   Username: @${me.username}');
+      print('   Name: ${me.firstName}');
+      print('   ID: ${me.id}');
+      print('📊 [Bot] Active sessions: ${_sessionManager.sessionCount}');
 
-      // Botni ishga tushirish (blocking emas)
-      _bot.start();
-      print('🔄 Polling started');
-
-      // Har 5 daqiqada statistika
-      Stream.periodic(Duration(minutes: 5)).listen((_) {
-        print('📊 Active sessions: ${_sessionManager.sessionCount}');
+      // Add a simple test handler
+      var messageCount = 0;
+      _bot.onMessage((ctx) {
+        messageCount++;
+        final from = ctx.from?.username ?? ctx.from?.firstName ?? 'unknown';
+        final text = ctx.message?.text ?? '[no text]';
+        print('📨 [Bot] Message #$messageCount from @$from: $text');
       });
 
-    } catch (e) {
-      print('❌ Bot start error: $e');
+      // Start polling
+      print('🔄 [Bot] Starting long polling loop...');
+      print('⏳ [Bot] Waiting for updates from Telegram...');
+
+      await _bot.start();
+
+      print('🛑 [Bot] Polling loop ended (this should not happen)');
+
+    } catch (e, stackTrace) {
+      print('❌ [Bot] Fatal error during start:');
+      print('   Error: $e');
+      print('   Stack trace:');
+      print(stackTrace);
       rethrow;
     }
   }
 
   /// Stop the bot
   Future<void> stop() async {
-    print('🛑 Stopping bot...');
+    print('🛑 [Bot] Stopping bot...');
     _sessionManager.clearAll();
     await _bot.stop();
-    print('✅ Bot stopped');
+    print('✅ [Bot] Bot stopped');
   }
 }
