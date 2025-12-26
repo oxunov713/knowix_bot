@@ -3,7 +3,7 @@ import '../bot.dart';
 import 'package:dotenv/dotenv.dart';
 
 void main(List<String> arguments) async {
-  var env = DotEnv()..load();
+ // var env = DotEnv()..load();
 
   final token = Platform.environment['BOT_TOKEN'];
   if (token == null || token.isEmpty) {
