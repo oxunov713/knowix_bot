@@ -1,10 +1,9 @@
 import 'dart:io';
-
 import '../bot.dart';
 
 void main(List<String> arguments) async {
   // Get bot token from environment variable
-  final token = '8338523756:AAG9p6Wz5O3Z4fQ0gq3vvj5AgRYsDQqhzQw';
+  final token = Platform.environment['BOT_TOKEN'];
 
   if (token == null || token.isEmpty) {
     print('❌ Error: BOT_TOKEN environment variable not set');

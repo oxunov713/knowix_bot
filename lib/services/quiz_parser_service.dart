@@ -27,15 +27,29 @@ class QuizParserService {
     final lines = text.split('\n').map((line) => line.trim()).where((line) => line.isNotEmpty).toList();
 
     String? currentQuestionText;
+    String? currentQuestionHint; // For inline correct answer hints
     final currentOptions = <String>[];
     int? correctOptionIndex;
 
     void finalizeQuestion() {
       if (currentQuestionText != null && currentOptions.length >= 2) {
+        // If no correct answer was explicitly marked, try to use the hint
+        if (correctOptionIndex == null && currentQuestionHint != null) {
+          correctOptionIndex = normalizer.parseCorrectAnswerFromHint(
+            currentQuestionHint!,
+            currentOptions.length,
+          );
+
+          if (correctOptionIndex != null) {
+            print('📌 Using hint to set correct answer: option ${correctOptionIndex! + 1}');
+          }
+        }
+
         // Validate exactly one correct answer
         if (correctOptionIndex == null) {
-          // Skip silently - no correct answer marked
+          print('⚠️ Skipping question (no correct answer): ${currentQuestionText!.substring(0, currentQuestionText!.length > 50 ? 50 : currentQuestionText!.length)}...');
           currentQuestionText = null;
+          currentQuestionHint = null;
           currentOptions.clear();
           return;
         }
@@ -54,6 +68,7 @@ class QuizParserService {
 
       // Reset state
       currentQuestionText = null;
+      currentQuestionHint = null;
       currentOptions.clear();
       correctOptionIndex = null;
     }
@@ -77,7 +92,11 @@ class QuizParserService {
           if (nextLine.isEmpty || _isPdfNoise(nextLine)) continue;
           if (_isToken(nextLine)) break;
 
-          currentQuestionText = nextLine;
+          // Check if question has inline hint
+          final (cleanQuestion, hint) = normalizer.extractCorrectAnswerHint(nextLine);
+          currentQuestionText = cleanQuestion;
+          currentQuestionHint = hint;
+
           i = j; // Skip to this line
           break;
         }
@@ -106,6 +125,8 @@ class QuizParserService {
               // Only set correct index if not already set (avoid multiple correct answers)
               if (correctOptionIndex == null) {
                 correctOptionIndex = currentOptions.length;
+              } else {
+                print('⚠️ Multiple correct answers detected, using first one');
               }
             }
             currentOptions.add(optionText);
@@ -128,6 +149,8 @@ class QuizParserService {
           // Only set correct index if not already set
           if (correctOptionIndex == null) {
             correctOptionIndex = currentOptions.length;
+          } else {
+            print('⚠️ Multiple correct answers detected, using first one');
           }
           currentOptions.add(nextLine);
 
@@ -145,6 +168,8 @@ class QuizParserService {
           // Only set correct index if not already set
           if (correctOptionIndex == null) {
             correctOptionIndex = currentOptions.length;
+          } else {
+            print('⚠️ Multiple correct answers detected, using first one');
           }
           currentOptions.add(optionText);
         }
@@ -157,7 +182,10 @@ class QuizParserService {
           currentOptions.isEmpty &&
           !_isPdfNoise(line) &&
           !_isToken(line)) {
-        currentQuestionText = line;
+        // Check if it has inline hint
+        final (cleanQuestion, hint) = normalizer.extractCorrectAnswerHint(line);
+        currentQuestionText = cleanQuestion;
+        currentQuestionHint = hint;
       }
     }
 
@@ -181,6 +209,7 @@ class QuizParserService {
     if (line.startsWith('<<') && line.endsWith('>>')) return true;
     if (line == 'obj' || line == 'endobj') return true;
     if (line.startsWith('/Type') || line.startsWith('/Filter')) return true;
+    if (line.startsWith('/') && line.contains('0 R')) return true;
 
     // Filter very long lines (likely binary)
     if (line.length > 300) return true;
@@ -188,6 +217,11 @@ class QuizParserService {
     // Filter lines with lots of non-printable characters
     final nonPrintable = line.codeUnits.where((c) => c < 32 || c > 126).length;
     if (nonPrintable > line.length * 0.3) return true;
+
+    // Filter lines that are mostly numbers and spaces (PDF metadata)
+    final digitsAndSpaces = line.codeUnits.where((c) =>
+    (c >= 48 && c <= 57) || c == 32).length;
+    if (digitsAndSpaces > line.length * 0.8 && line.length > 20) return true;
 
     return false;
   }
