@@ -109,24 +109,22 @@ class MessageHandler {
           '   • /stop - Testni to\'xtatish\n'
           '   • /help - Yordam\n\n'
           '📝 *HEMIS fayl formati:*\n'
-          '```\n'
-          '+++++ Savol matni\n'
-          '===== Variant A\n'
-          '===== #To\'g\'ri javob\n'
-          '===== Variant C\n'
-          '===== Variant D\n'
-          '```\n\n'
+          '`+++++ Savol matni`\n'
+          '`===== Variant A`\n'
+          '`===== \\#To\'g\'ri javob`\n'
+          '`===== Variant C`\n'
+          '`===== Variant D`\n\n'
           '⏸ *Testni to\'xtatish:*\n'
           '   • /stop buyrug\'i yoki\n'
           '   • 3 ta savolga javob bermasangiz avtomatik to\'xtatiladi\n'
           '   • Keyin davom ettirish yoki natijani ko\'rish mumkin\n\n'
           '💡 *Maslahatlar:*\n'
           '   • DOCX format eng yaxshi ishlaydi\n'
-          '   • # belgisi to\'g\'ri javobni ko\'rsatadi\n'
-          '   • Agar # yo\'q bo\'lsa, birinchi variant to\'g\'ri deb olinadi\n'
+          '   • \\# belgisi to\'g\'ri javobni ko\'rsatadi\n'
+          '   • Agar \\# yo\'q bo\'lsa, birinchi variant to\'g\'ri deb olinadi\n'
           '   • Kamida 2 ta variant bo\'lishi kerak\n'
           '   • PDF ishlamaydi, faqat DOCX yuboring!\n\n'
-          '❓ Savollaringiz bo\'lsa: @support_username',
+          '❓ Savollaringiz bo\'lsa: @support\\_username',
       parseMode: ParseMode.markdown,
     );
   }
