@@ -13,7 +13,12 @@ class QuizBot {
   late final UpdateHandler _updateHandler;
 
   QuizBot(String token) {
-    _bot = Bot(token);
+    // POLLING rejimini aniq belgilash
+    _bot = Bot(
+      token,
+      fetcher: LongPolling(), // Bu juda muhim!
+    );
+
     _quizService = QuizService();
     _sessionManager = QuizSessionManager();
 
@@ -30,11 +35,24 @@ class QuizBot {
   Future<void> start() async {
     print('🤖 Quiz Bot starting...');
 
-    final me = await _bot.getMe();
-    print('✅ Bot started: @${me.username}');
-    print('📊 Active sessions: ${_sessionManager.sessionCount}');
+    try {
+      final me = await _bot.getMe();
+      print('✅ Bot started: @${me.username}');
+      print('📊 Active sessions: ${_sessionManager.sessionCount}');
 
-    await _bot.start();
+      // Botni ishga tushirish (blocking emas)
+      _bot.start();
+      print('🔄 Polling started');
+
+      // Har 5 daqiqada statistika
+      Stream.periodic(Duration(minutes: 5)).listen((_) {
+        print('📊 Active sessions: ${_sessionManager.sessionCount}');
+      });
+
+    } catch (e) {
+      print('❌ Bot start error: $e');
+      rethrow;
+    }
   }
 
   /// Stop the bot

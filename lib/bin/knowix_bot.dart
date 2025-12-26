@@ -8,17 +8,23 @@ Future<void> main() async {
     exit(1);
   }
 
-  final bot = QuizBot(token);
-  await bot.start();
-
-  // Minimal HTTP server, Globe port binding uchun
+  // HTTP serverni BIRINCHI ishga tushirish (Globe uchun)
   final port = int.parse(Platform.environment['PORT'] ?? '8080');
   final server = await HttpServer.bind(InternetAddress.anyIPv4, port);
   print('🌐 HTTP server running on port $port');
 
-  await server.forEach((HttpRequest req) {
+  // HTTP serverga javob berish (background task)
+  server.listen((HttpRequest req) {
     req.response
-      ..write('Bot is running!')
+      ..statusCode = 200
+      ..headers.contentType = ContentType.json
+      ..write('{"status":"running","bot":"Quiz Bot"}')
       ..close();
   });
+
+  // Botni ishga tushirish (keyin)
+  final bot = QuizBot(token);
+  await bot.start();
+
+  print('✅ System fully started');
 }
