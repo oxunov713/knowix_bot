@@ -1,10 +1,11 @@
 import 'dart:io';
 import '../bot.dart';
+import 'package:dotenv/dotenv.dart';
 
 void main(List<String> arguments) async {
-  // Get bot token from environment variable
-  final token = Platform.environment['BOT_TOKEN'];
-
+  var env = DotEnv()..load();
+  final token = env['BOT_TOKEN'];
+  print(token);
   if (token == null || token.isEmpty) {
     print('❌ Error: BOT_TOKEN environment variable not set');
     print('💡 Usage: BOT_TOKEN=your_token_here dart run');

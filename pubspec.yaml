@@ -13,6 +13,7 @@ dependencies:
   path: ^1.9.1
   docx_to_text: ^1.0.1
   pdf: ^3.11.3
+  dotenv: ^4.2.0
 
 
 dev_dependencies:
