@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:televerse/televerse.dart';
 import 'services/quiz_service.dart';
 import 'services/quiz_session_manager.dart';
@@ -5,104 +6,83 @@ import 'handlers/update_handler.dart';
 import 'handlers/message_handler.dart';
 import 'handlers/poll_answer_handler.dart';
 
-/// Main bot class with MVVM architecture
 class QuizBot {
   late final Bot _bot;
   late final QuizService _quizService;
   late final QuizSessionManager _sessionManager;
   late final UpdateHandler _updateHandler;
+  bool _isRunning = false;
 
   QuizBot(String token) {
-    print('🔧 [Bot] Creating Bot instance...');
+    print('🔧 Bot init...');
 
-    // POLLING rejimini aniq belgilash
     _bot = Bot(
       token,
       fetcher: LongPolling(
         limit: 100,
         timeout: 30,
-        allowedUpdates: [
-          UpdateType.message,
-          UpdateType.callbackQuery,
-          UpdateType.pollAnswer,
-        ],
       ),
     );
 
-    print('✅ [Bot] Bot instance created with LongPolling');
-
     _quizService = QuizService();
     _sessionManager = QuizSessionManager();
-    print('✅ [Bot] Services initialized');
 
-    // Initialize handlers
     final messageHandler = MessageHandler(_quizService, _sessionManager);
     final pollAnswerHandler = PollAnswerHandler(_sessionManager);
     _updateHandler = UpdateHandler(messageHandler, pollAnswerHandler);
-    print('✅ [Bot] Handlers created');
 
-    // Setup handlers
     _updateHandler.setupHandlers(_bot);
-    print('✅ [Bot] Handlers registered to bot');
 
-    // Global error handler with logging
-    _bot.onError((BotError err) {
-      print('❌ [Bot] Error occurred:');
-      print('   Type: ${err.error.runtimeType}');
-      print('   Message: ${err.error}');
-      if (err.stackTrace != null) {
-        print('   Stack: ${err.stackTrace}');
-      }
-    });
-
-    print('✅ [Bot] Error handler registered');
+    print('✅ Bot ready');
   }
 
-  /// Start the bot
   Future<void> start() async {
-    print('🤖 [Bot] Starting bot polling...');
+    if (_isRunning) {
+      print('⚠️ Bot already running');
+      return;
+    }
 
     try {
-      // Test connection first
-      print('🔍 [Bot] Testing connection to Telegram...');
+      print('🔍 Testing Telegram connection...');
       final me = await _bot.getMe();
-      print('✅ [Bot] Connected successfully!');
-      print('   Username: @${me.username}');
-      print('   Name: ${me.firstName}');
-      print('   ID: ${me.id}');
-      print('📊 [Bot] Active sessions: ${_sessionManager.sessionCount}');
+      print('✅ Connected: @${me.username}');
 
-      // Add a simple test handler
-      var messageCount = 0;
+      _isRunning = true;
+
+      // Test message handler
+      var msgCount = 0;
       _bot.onMessage((ctx) {
-        messageCount++;
-        final from = ctx.from?.username ?? ctx.from?.firstName ?? 'unknown';
-        final text = ctx.message?.text ?? '[no text]';
-        print('📨 [Bot] Message #$messageCount from @$from: $text');
+        msgCount++;
+        print('📨 #$msgCount: ${ctx.from?.username ?? "?"} - ${ctx.message?.text ?? "[media]"}');
       });
 
-      // Start polling
-      print('🔄 [Bot] Starting long polling loop...');
-      print('⏳ [Bot] Waiting for updates from Telegram...');
+      print('🔄 Polling started');
 
-      await _bot.start();
+      // Start polling WITHOUT await to prevent blocking
+      _bot.start().then((_) {
+        print('⚠️ Polling ended unexpectedly');
+        _isRunning = false;
+      }).catchError((e) {
+        print('❌ Polling error: $e');
+        _isRunning = false;
+      });
 
-      print('🛑 [Bot] Polling loop ended (this should not happen)');
+      // Return immediately
+      print('✅ Bot is now polling in background');
 
-    } catch (e, stackTrace) {
-      print('❌ [Bot] Fatal error during start:');
-      print('   Error: $e');
-      print('   Stack trace:');
-      print(stackTrace);
+    } catch (e, stack) {
+      print('❌ Start error: $e');
+      print(stack);
+      _isRunning = false;
       rethrow;
     }
   }
 
-  /// Stop the bot
   Future<void> stop() async {
-    print('🛑 [Bot] Stopping bot...');
+    print('🛑 Stopping...');
+    _isRunning = false;
     _sessionManager.clearAll();
     await _bot.stop();
-    print('✅ [Bot] Bot stopped');
+    print('✅ Stopped');
   }
 }

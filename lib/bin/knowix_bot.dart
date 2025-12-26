@@ -2,82 +2,57 @@ import 'dart:io';
 import 'dart:async';
 import '../bot.dart';
 
-Future<void> main() async {
-  print('=' * 50);
-  print('🚀 QUIZ BOT STARTING');
-  print('=' * 50);
+void main() async {
+  // Global error catching
+  runZonedGuarded(() async {
+    print('🚀 Quiz Bot Service Starting');
 
-  final token = Platform.environment['BOT_TOKEN'] ?? '';
-  if (token.isEmpty) {
-    print('❌ BOT_TOKEN not set');
-    exit(1);
-  }
+    final token = Platform.environment['BOT_TOKEN'] ?? '';
+    if (token.isEmpty) {
+      print('❌ BOT_TOKEN missing');
+      exit(1);
+    }
 
-  print('✅ BOT_TOKEN: ${token.substring(0, 10)}...${token.substring(token.length - 5)}');
+    print('Token: ${token.substring(0, 10)}...');
 
-  // HTTP serverni ishga tushirish
-  final port = int.parse(Platform.environment['PORT'] ?? '8080');
-
-  try {
+    // HTTP Server
+    final port = int.parse(Platform.environment['PORT'] ?? '8080');
     final server = await HttpServer.bind(InternetAddress.anyIPv4, port);
-    print('🌐 HTTP server bound to port $port');
+    print('✅ HTTP :$port');
 
-    // Non-blocking HTTP handler
-    server.listen((HttpRequest req) {
-      final timestamp = DateTime.now().toIso8601String();
-      print('📥 [HTTP] ${req.method} ${req.uri.path} - $timestamp');
+    server.listen((req) {
       req.response
         ..statusCode = 200
-        ..headers.contentType = ContentType.json
-        ..write('{"status":"ok","service":"quiz_bot","time":"$timestamp"}')
+        ..write('{"status":"ok","bot":"active"}')
         ..close();
     });
 
-    print('✅ HTTP server is listening');
-  } catch (e) {
-    print('❌ HTTP server error: $e');
-    exit(1);
-  }
-
-  // Small delay to ensure HTTP is ready
-  await Future.delayed(Duration(milliseconds: 500));
-
-  // Botni ishga tushirish
-  print('=' * 50);
-  print('🤖 INITIALIZING BOT');
-  print('=' * 50);
-
-  try {
+    // Bot startup with error handling
+    print('🤖 Creating bot...');
     final bot = QuizBot(token);
-    print('✅ QuizBot instance created');
 
-    // Start bot without await (background task)
-    print('🔄 Starting bot in background...');
-    bot.start().then((_) {
-      print('✅ Bot.start() completed');
-    }).catchError((e) {
-      print('❌ Bot.start() error: $e');
+    // Run bot in separate zone
+    runZonedGuarded(() async {
+      print('🔄 Starting bot polling...');
+      await bot.start();
+    }, (error, stack) {
+      print('❌ Bot zone error: $error');
+      print(stack);
     });
 
-    // Give bot time to start
-    await Future.delayed(Duration(seconds: 2));
+    // Status check every 30 seconds
+    Timer.periodic(Duration(seconds: 30), (timer) {
+      print('💚 Heartbeat - System OK');
+    });
 
-    print('=' * 50);
-    print('✅ SYSTEM FULLY OPERATIONAL');
-    print('📡 Bot is polling for updates...');
-    print('🌐 HTTP health check available on port $port');
-    print('=' * 50);
+    print('✅ All systems operational');
 
-    // Keep process alive
+    // Keep alive
     await Future.delayed(Duration(days: 365 * 100));
 
-  } catch (e, stackTrace) {
-    print('=' * 50);
-    print('❌ CRITICAL ERROR');
-    print('=' * 50);
-    print('Error: $e');
-    print('Stack trace:');
-    print(stackTrace);
+  }, (error, stack) {
+    print('❌ Fatal error: $error');
+    print(stack);
     exit(1);
-  }
+  });
 }
