@@ -1,5 +1,4 @@
-/// Service for normalizing quiz text by injecting newlines around tokens
-/// This is STAGE 1 of the two-stage parsing strategy
+/// Service for normalizing quiz text - IMPROVED VERSION
 class QuizTextNormalizer {
   // Quiz format tokens
   static const String questionToken = '+++++';
@@ -21,147 +20,246 @@ class QuizTextNormalizer {
     normalized = normalized.replaceAll('\r\n', '\n');
     normalized = normalized.replaceAll('\r', '\n');
 
-    // STEP 2: Remove university metadata and headers (birinchi bir necha qator)
+    // STEP 2: Remove university metadata and headers
     normalized = _removeMetadata(normalized);
 
     // STEP 3: Inject newlines around question token (++++)
-    // 4 yoki 5 ta + belgisini qidirish
+    // MUHIM: Har xil variantlarni qo'llab-quvvatlash
     normalized = normalized.replaceAllMapped(
-      RegExp(r'\s*\+{4,5}\s*'),
-          (match) => '\n$questionToken\n',
+      RegExp(r'(\+{4,})'),
+          (match) {
+        final plusCount = match.group(0)!.length;
+        // 4 yoki 5 ta + ni standart formatga keltirish
+        return '\n$questionToken\n';
+      },
     );
 
     // STEP 4: Inject newlines around option token (====)
-    // 4 yoki 5 ta = belgisini qidirish
     normalized = normalized.replaceAllMapped(
-      RegExp(r'\s*={4,5}\s*'),
-          (match) => '\n$optionToken\n',
+      RegExp(r'(={4,})'),
+          (match) {
+        return '\n$optionToken\n';
+      },
     );
 
-    // STEP 5: Handle correct marker (#) carefully
-    // Pattern 1: # at start of line followed by text
+    // STEP 5: Handle correct marker (#) more carefully
+    // Pattern 1: ===== #Variant - bu eng keng tarqalgan format
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'($optionToken)\s*#\s*([^\n]+)', multiLine: true),
+          (match) {
+        final optionText = match.group(2)?.trim() ?? '';
+        if (optionText.isNotEmpty) {
+          return '${match.group(1)}\n$correctMarker$optionText';
+        }
+        return match.group(0)!;
+      },
+    );
+
+    // Pattern 2: # at start of line
     normalized = normalized.replaceAllMapped(
       RegExp(r'^\s*#\s*([^\n]+)', multiLine: true),
           (match) {
         final optionText = match.group(1)?.trim() ?? '';
-        return '$correctMarker$optionText';
+        if (optionText.isNotEmpty && !_isToken(optionText)) {
+          return '$correctMarker$optionText';
+        }
+        return match.group(0)!;
       },
     );
 
-    // Pattern 2: # in middle of text (e.g., after option token)
+    // STEP 6: Remove inline correct answer hints from questions
+    // +++++ Question text #javob X ===== -> +++++ Question text \n =====
     normalized = normalized.replaceAllMapped(
-      RegExp(r'($optionToken)\s*#\s*([^\n]+)'),
+      RegExp(
+        r'($questionToken[^\+\=]*?)#[^=\+\n]*?($optionToken)',
+        multiLine: true,
+        dotAll: true,
+      ),
+          (match) {
+        return '${match.group(1)?.trim()}\n${match.group(2)}';
+      },
+    );
+
+    // STEP 7: Clean up variant labels MORE CAREFULLY
+    // Faqat ===== dan keyin kelgan A), B), C), D) ni olib tashlash
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'($optionToken)\s*\n\s*([A-Da-dА-Га-г][\)\.])\s*([^\n]+)',
+          multiLine: true),
+          (match) {
+        final content = match.group(3)?.trim() ?? '';
+        return '${match.group(1)}\n$content';
+      },
+    );
+
+    // STEP 8: Handle cases where question and first option are on same line
+    // +++++ Question? ===== Option1
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'($questionToken)([^\n]+)($optionToken)', multiLine: true),
+          (match) {
+        final questionText = match.group(2)?.trim() ?? '';
+        if (questionText.isNotEmpty) {
+          return '${match.group(1)}\n$questionText\n${match.group(3)}';
+        }
+        return match.group(0)!;
+      },
+    );
+
+    // STEP 9: Handle cases where options are on same line
+    // ===== Option1 ===== Option2
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'($optionToken)([^\n]+?)($optionToken)', multiLine: true),
+          (match) {
+        final optionText = match.group(2)?.trim() ?? '';
+        if (optionText.isNotEmpty) {
+          return '${match.group(1)}\n$optionText\n${match.group(3)}';
+        }
+        return match.group(0)!;
+      },
+    );
+
+    // STEP 10: Fix cases where # is separated from option token
+    // ===== \n # Option -> ===== \n #Option
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'($optionToken)\s*\n\s*#\s*([^\n]+)', multiLine: true),
           (match) {
         final optionText = match.group(2)?.trim() ?? '';
         return '${match.group(1)}\n$correctMarker$optionText';
       },
     );
 
-    // STEP 6: Remove inline correct answer hints from questions
-    // Pattern: "++++ Question text #to'g'ri javob X ===="
-    normalized = normalized.replaceAllMapped(
-      RegExp(r'($questionToken[^\+\=]*?)#[^=\+\n]*?($optionToken)',
-          multiLine: true,
-          dotAll: true),
-          (match) {
-        return '${match.group(1)}\n${match.group(2)}';
-      },
-    );
-
-    // STEP 7: Clean up variant labels (A), B), C), D) or A. B. C. D.)
-    // Bu label-larni olib tashlaymiz, chunki ular Telegramda keraksiz
-    normalized = normalized.replaceAllMapped(
-      RegExp(r'^([A-Da-d][\)\.])\s*', multiLine: true),
-          (match) => '',
-    );
-
-    // STEP 8: Collapse multiple consecutive newlines
+    // STEP 11: Collapse multiple consecutive newlines (but keep at least one)
     normalized = normalized.replaceAll(RegExp(r'\n\s*\n+'), '\n');
 
-    // STEP 9: Collapse multiple spaces into single space
+    // STEP 12: Collapse multiple spaces into single space
     normalized = normalized.replaceAllMapped(
       RegExp(r'[^\S\n]+'),
           (match) => ' ',
     );
 
-    // STEP 10: Trim each line
+    // STEP 13: Trim each line
     final lines = normalized.split('\n');
-    normalized = lines.map((line) => line.trim()).join('\n');
+    normalized = lines.map((line) => line.trim()).where((line) => line.isNotEmpty).join('\n');
 
-    // STEP 11: Remove leading/trailing newlines
+    // STEP 14: Remove leading/trailing newlines
     normalized = normalized.trim();
 
-    print('📝 Normalizatsiya tugadi: ${normalized.length} belgi');
+    // STEP 15: Final validation - ensure we have proper structure
+    final questionCount = RegExp(r'\n\+{5}\n').allMatches(normalized).length;
+    print('📝 Normalizatsiya tugadi: ${normalized.length} belgi, ~$questionCount ta savol');
 
     return normalized;
   }
 
-  /// Remove university metadata and headers
+  /// Remove university metadata and headers - IMPROVED
   String _removeMetadata(String text) {
     final lines = text.split('\n');
     final cleanLines = <String>[];
     bool foundFirstQuestion = false;
+    int headerLineCount = 0;
 
-    for (final line in lines) {
-      // Agar birinchi savol topilsa, barcha qatorlarni qo'shamiz
-      if (foundFirstQuestion) {
-        cleanLines.add(line);
-        continue;
-      }
+    for (int i = 0; i < lines.length; i++) {
+      final line = lines[i].trim();
 
-      // Birinchi savol belgisini qidiramiz
-      if (line.contains(RegExp(r'\+{4,5}'))) {
+      // Skip empty lines
+      if (line.isEmpty) continue;
+
+      // Check if this is the first question marker
+      if (line.contains(RegExp(r'\+{4,}'))) {
         foundFirstQuestion = true;
         cleanLines.add(line);
         continue;
       }
 
-      // Metadatani o'tkazib yuboramiz
-      if (_isMetadata(line)) {
+      // If we found first question, add all subsequent lines
+      if (foundFirstQuestion) {
+        cleanLines.add(line);
         continue;
       }
 
-      // Agar savol boshlanmagan bo'lsa, potentsial metadatani o'tkazib yuboramiz
-      if (!foundFirstQuestion && line.trim().isNotEmpty) {
-        if (line.length < 100 && !line.contains('?')) {
+      // Before first question, filter out metadata
+      if (!foundFirstQuestion) {
+        headerLineCount++;
+
+        // Skip obvious metadata (first 50 lines)
+        if (headerLineCount <= 50 && _isMetadata(line)) {
           continue;
         }
-      }
 
-      cleanLines.add(line);
+        // If line looks like part of a question, keep it
+        if (line.length > 20 || line.contains('?') || line.contains(RegExp(r'={4,}'))) {
+          cleanLines.add(line);
+        }
+      }
     }
 
     return cleanLines.join('\n');
   }
 
-  /// Check if line is metadata
+  /// Check if line is metadata - IMPROVED
   bool _isMetadata(String line) {
     final lowerLine = line.toLowerCase().trim();
 
-    // Bo'sh qator
-    if (lowerLine.isEmpty) return true;
+    // Very short lines (less than 5 characters)
+    if (lowerLine.length < 5) return true;
 
-    // Universitet nomlari
-    if (lowerLine.contains('universitet') ||
-        lowerLine.contains('institute') ||
-        lowerLine.contains('university')) return true;
+    // Common header keywords (Uzbek and Russian)
+    final metadataKeywords = [
+      'universitet',
+      'institute',
+      'university',
+      'respublika',
+      'vazirligi',
+      'kafedra',
+      'department',
+      'tasdiqlayman',
+      'prorekt',
+      'mudiri',
+      'tuzuvchi',
+      'muhokama',
+      'tasdiqlash',
+      'sentyabr',
+      'oktabr',
+      'noyabr',
+      'dekabr',
+      'yanvar',
+      'fevral',
+      'toshkent',
+      'kafolat',
+      'xati',
+      'zimma',
+      'ma\'sul',
+      'o\'quv',
+      'kunduzgi',
+      'sirtqi',
+      'kurs',
+      'guruh',
+      'fan',
+      'maqsad',
+    ];
 
-    // Sana va vaqt
-    if (RegExp(r'\d{1,2}[./-]\d{1,2}[./-]\d{2,4}').hasMatch(lowerLine)) return true;
+    for (final keyword in metadataKeywords) {
+      if (lowerLine.contains(keyword)) return true;
+    }
 
-    // Kurs, guruh va boshqa ma'lumotlar
-    if (lowerLine.contains('kurs') ||
-        lowerLine.contains('guruh') ||
-        lowerLine.contains('group') ||
-        lowerLine.contains('kafedra') ||
-        lowerLine.contains('department')) return true;
+    // Date patterns
+    if (RegExp(r'\d{1,2}[./-]\d{1,2}[./-]\d{2,4}').hasMatch(lowerLine)) {
+      return true;
+    }
 
-    // Test raqami, variant
-    if (RegExp(r'(test|variant|versiya)\s*[№#:]\s*\d+', caseSensitive: false)
-        .hasMatch(lowerLine)) return true;
+    // Phone numbers
+    if (RegExp(r'\+?\d{1,3}[-\s]?\(?\d{2,3}\)?[-\s]?\d{3}[-\s]?\d{2}[-\s]?\d{2}')
+        .hasMatch(lowerLine)) {
+      return true;
+    }
 
-    // Juda qisqa qatorlar (3 so'zdan kam)
-    if (lowerLine.split(RegExp(r'\s+')).length < 3) return true;
+    // Lines with mostly underscores or dashes
+    final specialChars = line.codeUnits.where((c) => c == 95 || c == 45).length;
+    if (specialChars > line.length * 0.5) return true;
+
+    // Lines that are just numbers and spaces
+    final digitsAndSpaces =
+        line.codeUnits.where((c) => (c >= 48 && c <= 57) || c == 32).length;
+    if (digitsAndSpaces > line.length * 0.8 && line.length > 5) return true;
 
     return false;
   }
@@ -171,42 +269,62 @@ class QuizTextNormalizer {
     var result = text;
 
     // Fix Cyrillic quotes and apostrophes
-    result = result.replaceAll('â', "'");
-    result = result.replaceAll('Â«', '"');
-    result = result.replaceAll('Â»', '"');
-    result = result.replaceAll('`', "'");
-    result = result.replaceAll(''', "'");
-    result = result.replaceAll(''', "'");
-    result = result.replaceAll('"', '"');
-    result = result.replaceAll('"', '"');
+    final replacements = {
+      'â': "'",
+      'Â«': '"',
+      'Â»': '"',
+      '`': "'",
+      ''': "'",
+      ''': "'",
+      '"': '"',
+      '"': '"',
+      'â€™': "'",
+      'â€œ': '"',
+      'â€': '"',
+      // Uzbek specific
+      'toâgâri': "to'g'ri",
+      'togâri': "to'g'ri",
+      'toʻgʻri': "to'g'ri",
+      'oâ': "o'",
+      'gâ': "g'",
+      'oʻ': "o'",
+      'gʻ': "g'",
+      'oʼ': "o'",
+      'gʼ': "g'",
+    };
 
-    // Fix specific Uzbek words
-    result = result.replaceAll('toâgâri', "to'g'ri");
-    result = result.replaceAll('togâri', "to'g'ri");
-    result = result.replaceAll('toʻgʻri', "to'g'ri");
-    result = result.replaceAll('oâ', "o'");
-    result = result.replaceAll('gâ', "g'");
-    result = result.replaceAll('oʻ', "o'");
-    result = result.replaceAll('gʻ', "g'");
+    replacements.forEach((key, value) {
+      result = result.replaceAll(key, value);
+    });
 
     return result;
   }
 
+  /// Check if text is a token
+  bool _isToken(String text) {
+    return text == questionToken ||
+        text == optionToken ||
+        text.startsWith(correctMarker);
+  }
+
   /// Check if text contains quiz tokens
   bool hasQuizTokens(String text) {
-    return RegExp(r'\+{4,5}').hasMatch(text) ||
-        RegExp(r'={4,5}').hasMatch(text) ||
+    return RegExp(r'\+{4,}').hasMatch(text) ||
+        RegExp(r'={4,}').hasMatch(text) ||
         text.contains(correctMarker);
   }
 
   /// Validate that text has minimum required structure
   bool hasMinimumStructure(String text) {
-    return RegExp(r'\+{4,5}').hasMatch(text) &&
-        RegExp(r'={4,5}').hasMatch(text);
+    final questionMatches = RegExp(r'\+{4,}').allMatches(text).length;
+    final optionMatches = RegExp(r'={4,}').allMatches(text).length;
+
+    return questionMatches > 0 && optionMatches >= questionMatches * 2;
   }
 
   /// Extract correct answer hint from question text if present
-  (String cleanQuestion, String? hint) extractCorrectAnswerHint(String questionText) {
+  (String cleanQuestion, String? hint) extractCorrectAnswerHint(
+      String questionText) {
     if (!questionText.contains('#')) {
       return (questionText, null);
     }
@@ -227,15 +345,19 @@ class QuizTextNormalizer {
     final lowerHint = hint.toLowerCase();
 
     // Pattern 1: Single letter (a, b, c, d or Cyrillic а, б, в, г)
-    final letterMatch = RegExp(r'\b([a-d]|[а-г])\b', caseSensitive: false)
+    final letterMatch = RegExp(r'\b([a-dа-г])\b', caseSensitive: false)
         .firstMatch(lowerHint);
     if (letterMatch != null) {
       final letter = letterMatch.group(1)!.toLowerCase();
       final letterMap = {
-        'a': 0, 'а': 0,
-        'b': 1, 'б': 1,
-        'c': 2, 'в': 2,
-        'd': 3, 'г': 3,
+        'a': 0,
+        'а': 0,
+        'b': 1,
+        'б': 1,
+        'c': 2,
+        'в': 2,
+        'd': 3,
+        'г': 3,
       };
       final index = letterMap[letter];
       if (index != null && index < optionCount) {

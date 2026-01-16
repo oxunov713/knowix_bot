@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:televerse/televerse.dart';
 import 'services/quiz_service.dart';
 import 'services/quiz_session_manager.dart';
+import 'services/supabase_service.dart';
 import 'handlers/update_handler.dart';
 import 'handlers/message_handler.dart';
 import 'handlers/poll_answer_handler.dart';
@@ -10,10 +11,11 @@ class QuizBot {
   late final Bot _bot;
   late final QuizService _quizService;
   late final QuizSessionManager _sessionManager;
+  late final SupabaseService _supabaseService;
   late final UpdateHandler _updateHandler;
   bool _isRunning = false;
 
-  QuizBot(String token) {
+  QuizBot(String token, String supabaseUrl, String supabaseKey) {
     print('🔧 Bot init...');
 
     _bot = Bot(
@@ -26,14 +28,37 @@ class QuizBot {
 
     _quizService = QuizService();
     _sessionManager = QuizSessionManager();
+    _supabaseService = SupabaseService();
 
-    final messageHandler = MessageHandler(_quizService, _sessionManager);
-    final pollAnswerHandler = PollAnswerHandler(_sessionManager);
+    // Supabase-ni initialize qilish
+    _initializeSupabase(supabaseUrl, supabaseKey);
+
+    final messageHandler = MessageHandler(
+      _quizService,
+      _sessionManager,
+      _supabaseService,
+    );
+
+    final pollAnswerHandler = PollAnswerHandler(
+      _sessionManager,
+      _supabaseService,
+    );
+
     _updateHandler = UpdateHandler(messageHandler, pollAnswerHandler);
-
     _updateHandler.setupHandlers(_bot);
 
     print('✅ Bot ready');
+  }
+
+  /// Supabase-ni asynchronously initialize qilish
+  Future<void> _initializeSupabase(String url, String key) async {
+    try {
+      await _supabaseService.initialize(url, key);
+      print('✅ Supabase connected');
+    } catch (e) {
+      print('❌ Supabase error: $e');
+      print('⚠️ Bot Supabase siz ishlaydi, lekin ma\'lumotlar saqlanmaydi');
+    }
   }
 
   Future<void> start() async {
@@ -49,7 +74,7 @@ class QuizBot {
 
       _isRunning = true;
 
-      // Test message handler
+      // Message counter for monitoring
       var msgCount = 0;
       _bot.onMessage((ctx) {
         msgCount++;
@@ -58,7 +83,7 @@ class QuizBot {
 
       print('🔄 Polling started');
 
-      // Start polling WITHOUT await to prevent blocking
+      // Start polling in background
       _bot.start().then((_) {
         print('⚠️ Polling ended unexpectedly');
         _isRunning = false;
@@ -67,7 +92,6 @@ class QuizBot {
         _isRunning = false;
       });
 
-      // Return immediately
       print('✅ Bot is now polling in background');
 
     } catch (e, stack) {
@@ -84,5 +108,10 @@ class QuizBot {
     _sessionManager.clearAll();
     await _bot.stop();
     print('✅ Stopped');
+  }
+
+  /// Admin statistikasini olish
+  Future<Map<String, dynamic>> getAdminStats() async {
+    return await _supabaseService.getAdminStats();
   }
 }

@@ -29,6 +29,18 @@ class UpdateHandler {
       await messageHandler.handleStop(ctx);
     });
 
+    // YANGI: Quizlarim buyrug'i
+    bot.command('quizlarim', (ctx) async {
+      print('📍 [Handler] /quizlarim from ${ctx.from?.username ?? "unknown"}');
+      await messageHandler.handleMyQuizzes(ctx);
+    });
+
+    // YANGI: Statistika buyrug'i
+    bot.command('statistika', (ctx) async {
+      print('📍 [Handler] /statistika from ${ctx.from?.username ?? "unknown"}');
+      await messageHandler.handleStatistics(ctx);
+    });
+
     print('✅ [UpdateHandler] Command handlers registered');
 
     // Document and text message handler
@@ -39,7 +51,6 @@ class UpdateHandler {
           await messageHandler.handleDocument(ctx);
         } else if (ctx.message!.text != null) {
           final text = ctx.message!.text!;
-          // Ignore commands (already handled by bot.command)
           if (!text.startsWith('/')) {
             print('💬 [Handler] Text message from ${ctx.from?.username ?? "unknown"}: ${text.length > 50 ? text.substring(0, 50) + "..." : text}');
             await messageHandler.handleText(ctx);
@@ -58,14 +69,11 @@ class UpdateHandler {
         final data = ctx.callbackQuery?.data;
         print('🔘 [Handler] Callback from ${ctx.from?.username ?? "unknown"}: $data');
 
-        // Quiz control callbacks (continue/finish/restart)
         if (data == 'quiz_continue' ||
             data == 'quiz_finish' ||
             data == 'quiz_restart') {
           await pollAnswerHandler.handleQuizControl(ctx);
-        }
-        // Shuffle choice and time selection callbacks
-        else {
+        } else {
           await messageHandler.handleCallback(ctx);
         }
       } catch (e) {

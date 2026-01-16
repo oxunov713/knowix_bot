@@ -1,3 +1,7 @@
+import 'package:televerse/telegram.dart';
+import 'package:televerse/televerse.dart';
+
+import '../services/supabase_service.dart';
 import 'question.dart';
 
 /// Represents a complete quiz with all questions
@@ -42,3 +46,5 @@ class Quiz {
 
   bool get isValid => questions.isNotEmpty && questions.every((q) => q.isValid());
 }
+
+

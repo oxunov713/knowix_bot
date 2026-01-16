@@ -4,10 +4,9 @@ import 'package:archive/archive.dart';
 import 'package:path/path.dart' as path;
 import 'package:xml/xml.dart' as xml;
 
-/// Turli fayl formatlaridan matn ajratib oluvchi yaxshilangan servis
-/// PDF qo'llab-quvvatlanmaydi - faqat DOCX, DOC, TXT
+/// Improved text extractor service for DOCX, DOC, TXT files
 class FileTextExtractorService {
-  /// Fayl kengaytmasiga qarab matn ajratish
+  /// Extract text from file based on extension
   Future<String> extractText(File file) async {
     final extension = path.extension(file.path).toLowerCase();
 
@@ -30,11 +29,11 @@ class FileTextExtractorService {
     }
   }
 
-  /// TXT fayldan matn ajratish
+  /// Extract text from TXT file
   Future<String> _extractFromTxt(File file) async {
     print('📖 TXT fayl o\'qilmoqda...');
 
-    // Turli kodlashlarni sinab ko'rish
+    // Try multiple encodings
     final List<Encoding> encodings = [
       utf8,
       latin1,
@@ -46,7 +45,7 @@ class FileTextExtractorService {
     for (final encoding in encodings) {
       try {
         final text = await file.readAsString(encoding: encoding);
-        if (text.isNotEmpty) {
+        if (text.isNotEmpty && !_hasGarbledText(text)) {
           print('📖 TXT fayl o\'qildi (${encoding.name}): ${text.length} belgi');
           return text;
         }
@@ -58,7 +57,28 @@ class FileTextExtractorService {
     throw Exception('TXT faylni hech qanday kodlashda o\'qib bo\'lmadi');
   }
 
-  /// DOCX fayldan matn ajratish - to'liq yaxshilangan usul
+  /// Check if text contains garbled/corrupted characters
+  bool _hasGarbledText(String text) {
+    if (text.length < 100) return false;
+
+    // Count weird characters
+    int weirdChars = 0;
+    for (int i = 0; i < text.length && i < 500; i++) {
+      final code = text.codeUnitAt(i);
+      // ASCII control chars (except newline, tab, carriage return)
+      if ((code < 32 && code != 10 && code != 13 && code != 9) ||
+          // Replacement character
+          code == 65533 ||
+          // Private use area
+          (code >= 57344 && code <= 63743)) {
+        weirdChars++;
+      }
+    }
+
+    return weirdChars > text.length * 0.1;
+  }
+
+  /// Extract text from DOCX file - COMPREHENSIVE METHOD
   Future<String> _extractFromDocx(File file) async {
     print('📖 DOCX fayl o\'qilmoqda...');
 
@@ -66,61 +86,55 @@ class FileTextExtractorService {
       final bytes = await file.readAsBytes();
       print('📖 DOCX fayl hajmi: ${bytes.length} bayt');
 
-      // ZIP arxivini ochish
+      // Decode ZIP archive
       final archive = ZipDecoder().decodeBytes(bytes);
+      print('📖 ZIP arxiv ochildi: ${archive.files.length} ta fayl');
 
-      // Asosiy dokument faylini topish
+      // Find main document
       final documentFile = archive.findFile('word/document.xml');
       if (documentFile == null) {
-        throw Exception('DOCX fayl strukturasi noto\'g\'ri: word/document.xml topilmadi');
+        throw Exception('DOCX strukturasi noto\'g\'ri: word/document.xml topilmadi');
       }
 
-      // XML ni o'qish
+      // Decode XML
       final xmlContent = utf8.decode(documentFile.content as List<int>);
+      print('📖 XML hajmi: ${xmlContent.length} belgi');
 
-      // XML ni parse qilish
+      // Parse XML
       final document = xml.XmlDocument.parse(xmlContent);
 
-      // Barcha matn elementlarini yig'ish - YANGILANGAN USUL
-      final buffer = StringBuffer();
+      // Extract text using MULTIPLE methods for best coverage
+      final methods = [
+        _extractViaParagraphs,
+        _extractViaTextNodes,
+        _extractViaAllElements,
+      ];
 
-      // <w:p> (paragraph) elementlarini qidirish
-      final paragraphs = document.findAllElements('w:p');
+      String bestResult = '';
+      int bestScore = 0;
 
-      print('📖 Topilgan paragraflar: ${paragraphs.length}');
+      for (final method in methods) {
+        try {
+          final result = method(document);
+          final score = _scoreExtractedText(result);
 
-      for (final paragraph in paragraphs) {
-        final paragraphText = _extractTextFromParagraph(paragraph);
-        if (paragraphText.isNotEmpty) {
-          buffer.writeln(paragraphText);
+          print('📖 Usul natijasi: ${result.length} belgi, skor: $score');
+
+          if (score > bestScore) {
+            bestScore = score;
+            bestResult = result;
+          }
+        } catch (e) {
+          print('⚠️ Usul xatolik: $e');
         }
       }
 
-      String result = buffer.toString().trim();
-
-      // Agar paragraflar bo'yicha kam matn topilsa, alternativ usul
-      if (result.length < 500 || !_containsQuizFormat(result)) {
-        print('📖 Asosiy usul kam natija berdi, qo\'shimcha usullarni ishlatamiz...');
-        final alternativeResult = _extractAllTextElements(document);
-
-        // Eng yaxshi natijani tanlash
-        if (alternativeResult.length > result.length) {
-          result = alternativeResult;
-        }
-      }
-
-      print('📖 DOCX\'dan ajratildi: ${result.length} belgi');
-
-      if (result.isEmpty) {
+      if (bestResult.isEmpty) {
         throw Exception('DOCX fayldan matn ajratib bo\'lmadi');
       }
 
-      // Test formatini tekshirish
-      if (!_containsQuizFormat(result)) {
-        print('⚠️ Ogohlik: DOCX faylda HEMIS test formati aniq emas');
-      }
-
-      return result;
+      print('✅ DOCX\'dan ajratildi: ${bestResult.length} belgi');
+      return bestResult;
 
     } catch (e) {
       print('❌ DOCX xatolik: $e');
@@ -128,44 +142,60 @@ class FileTextExtractorService {
     }
   }
 
-  /// Paragrafdan matn ajratish - yaxshilangan
-  String _extractTextFromParagraph(xml.XmlElement paragraph) {
+  /// Method 1: Extract via paragraphs (standard approach)
+  String _extractViaParagraphs(xml.XmlDocument document) {
     final buffer = StringBuffer();
+    final paragraphs = document.findAllElements('w:p');
 
-    // Barcha <w:t> elementlarini topish
-    final textElements = paragraph.findAllElements('w:t');
-
-    for (final textElement in textElements) {
-      final text = textElement.innerText;
-      if (text.isNotEmpty) {
-        buffer.write(text);
+    for (final paragraph in paragraphs) {
+      final paragraphText = _extractTextFromParagraph(paragraph);
+      if (paragraphText.isNotEmpty) {
+        buffer.writeln(paragraphText);
       }
-    }
-
-    // Barcha <w:tab/> elementlarini bo'sh joy bilan almashtirish
-    if (paragraph.findElements('w:tab').isNotEmpty) {
-      buffer.write(' ');
     }
 
     return buffer.toString().trim();
   }
 
-  /// Barcha matn elementlarini ajratish - to'liq usul
-  String _extractAllTextElements(xml.XmlDocument document) {
+  /// Method 2: Extract via all text nodes
+  String _extractViaTextNodes(xml.XmlDocument document) {
     final buffer = StringBuffer();
-    final lines = <String>[];
+    final textElements = document.findAllElements('w:t');
 
-    // Barcha paragraflarni qayta ishlash
+    String currentLine = '';
+    xml.XmlElement? lastParent;
+
+    for (final textElement in textElements) {
+      final text = textElement.innerText;
+
+      // Detect paragraph breaks
+      final currentParent = _findParentParagraph(textElement);
+      if (currentParent != lastParent && currentLine.isNotEmpty) {
+        buffer.writeln(currentLine.trim());
+        currentLine = '';
+      }
+
+      currentLine += text;
+      lastParent = currentParent;
+    }
+
+    if (currentLine.isNotEmpty) {
+      buffer.writeln(currentLine.trim());
+    }
+
+    return buffer.toString().trim();
+  }
+
+  /// Method 3: Extract all text content (aggressive)
+  String _extractViaAllElements(xml.XmlDocument document) {
+    final lines = <String>[];
     final paragraphs = document.findAllElements('w:p');
 
     for (final paragraph in paragraphs) {
+      final runs = paragraph.findElements('w:r');
       final lineBuffer = StringBuffer();
 
-      // Paragraf ichidagi barcha runs (w:r)
-      final runs = paragraph.findElements('w:r');
-
       for (final run in runs) {
-        // Har bir run ichidagi matn
         final textElements = run.findElements('w:t');
         for (final textElement in textElements) {
           final text = textElement.innerText.trim();
@@ -174,9 +204,16 @@ class FileTextExtractorService {
           }
         }
 
-        // Tab va boshqa bo'sh joylar
+        // Handle tabs and breaks
         if (run.findElements('w:tab').isNotEmpty) {
           lineBuffer.write(' ');
+        }
+        if (run.findElements('w:br').isNotEmpty) {
+          final currentLine = lineBuffer.toString().trim();
+          if (currentLine.isNotEmpty) {
+            lines.add(currentLine);
+            lineBuffer.clear();
+          }
         }
       }
 
@@ -186,57 +223,89 @@ class FileTextExtractorService {
       }
     }
 
-    // Barcha qatorlarni birlashtirish
     return lines.join('\n');
   }
 
-  /// Matnda test formati borligini tekshirish
-  bool _containsQuizFormat(String text) {
-    if (text.length < 100) return false;
+  /// Extract text from a paragraph element
+  String _extractTextFromParagraph(xml.XmlElement paragraph) {
+    final buffer = StringBuffer();
 
-    // HEMIS test formatini qidirish
-    final patterns = [
-      RegExp(r'\+{4,5}'),  // ++++ yoki +++++
-      RegExp(r'={4,5}'),   // ==== yoki =====
-      RegExp(r'#'),        // To'g'ri javob belgisi
-      RegExp(r'\?'),       // Savol belgisi
-      RegExp(r'[A-Da-d][\)\.]'), // Variantlar: A) B) C) D) yoki A. B. C. D.
-    ];
+    // Get all text elements
+    final textElements = paragraph.findAllElements('w:t');
 
-    int matches = 0;
-    for (final pattern in patterns) {
-      if (pattern.hasMatch(text)) {
-        matches++;
+    for (final textElement in textElements) {
+      final text = textElement.innerText;
+      if (text.isNotEmpty) {
+        buffer.write(text);
       }
     }
 
-    return matches >= 2;
+    // Handle tabs
+    final tabs = paragraph.findElements('w:tab').length;
+    if (tabs > 0) {
+      buffer.write(' ' * tabs);
+    }
+
+    return buffer.toString().trim();
   }
 
-  /// Fayl turi qo'llab-quvvatlanadimi
+  /// Find parent paragraph of an element
+  xml.XmlElement? _findParentParagraph(xml.XmlElement element) {
+    xml.XmlNode? current = element.parent;
+
+    while (current != null) {
+      if (current is xml.XmlElement && current.name.local == 'p') {
+        return current;
+      }
+      current = current.parent;
+    }
+
+    return null;
+  }
+
+  /// Score extracted text quality
+  int _scoreExtractedText(String text) {
+    if (text.isEmpty) return 0;
+
+    int score = text.length; // Base score: length
+
+    // Bonus for quiz format markers
+    if (RegExp(r'\+{4,}').hasMatch(text)) score += 1000;
+    if (RegExp(r'={4,}').hasMatch(text)) score += 1000;
+    if (text.contains('#')) score += 500;
+
+    // Bonus for question marks
+    score += '?'.allMatches(text).length * 100;
+
+    // Bonus for Cyrillic text (Uzbek/Russian)
+    final cyrillicChars = text.codeUnits.where((c) => c >= 1040 && c <= 1103).length;
+    score += cyrillicChars * 2;
+
+    // Penalty for very long lines (might be corrupted)
+    final lines = text.split('\n');
+    final longLines = lines.where((line) => line.length > 500).length;
+    score -= longLines * 100;
+
+    // Penalty for too many weird characters
+    final weirdChars = text.codeUnits.where((c) =>
+    c < 32 && c != 10 && c != 13 && c != 9
+    ).length;
+    score -= weirdChars * 10;
+
+    return score;
+  }
+
+  /// Check if file type is supported
   bool isSupportedFileType(String filename) {
     final extension = path.extension(filename).toLowerCase();
     return ['.txt', '.doc', '.docx'].contains(extension);
   }
 
-  /// Savollar sonini taxminiy hisoblash
+  /// Estimate question count in text
   int countQuestions(String text) {
     if (text.isEmpty) return 0;
 
-    // HEMIS formatidagi savol ajratuvchilari
-    final questionSeparators = [
-      RegExp(r'\+{4,5}'),
-      RegExp(r'\n\s*\n'), // Bo'sh qatorlar
-    ];
-
-    int maxCount = 0;
-    for (final separator in questionSeparators) {
-      final count = separator.allMatches(text).length;
-      if (count > maxCount) {
-        maxCount = count;
-      }
-    }
-
-    return maxCount;
+    final questionMarkers = RegExp(r'\+{4,}').allMatches(text).length;
+    return questionMarkers;
   }
 }

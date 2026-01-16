@@ -2,18 +2,21 @@ import '../models/quiz_session.dart';
 import '../models/quiz.dart';
 import 'dart:async';
 
-/// Manages active quiz sessions for users
+/// Manages active quiz sessions for users (Supabase integratsiyasi uchun yaxshilangan)
 class QuizSessionManager {
   final Map<int, QuizSession> _sessions = {};
   final Map<int, Timer> _timeoutTimers = {};
   final Map<int, int> _missedQuestions = {};
+
+  // Qo'shimcha ma'lumotlar Supabase uchun
+  final Map<int, String> _fileNames = {};
+  final Map<int, int> _quizIds = {};
 
   static const int maxMissedQuestions = 3;
   static const Duration timeoutDuration = Duration(minutes: 2);
 
   /// Create a new session
   QuizSession createSession(int userId, Quiz quiz) {
-    // Clear any existing session and timer
     _cancelTimer(userId);
 
     final session = QuizSession(
@@ -113,46 +116,25 @@ class QuizSessionManager {
   QuizSession? endSession(int userId) {
     _cancelTimer(userId);
     _missedQuestions.remove(userId);
+    _fileNames.remove(userId);
+    _quizIds.remove(userId);
     return _sessions.remove(userId);
   }
 
   /// Clear all sessions
   void clearAll() {
-    // Cancel all timers
     for (final timer in _timeoutTimers.values) {
       timer.cancel();
     }
     _timeoutTimers.clear();
     _missedQuestions.clear();
     _sessions.clear();
+    _fileNames.clear();
+    _quizIds.clear();
   }
 
   /// Get session count
   int get sessionCount => _sessions.length;
-
-  /// Update pending raw text (for configuration flow)
-  void setPendingRawText(int userId, String rawText) {
-    var session = _sessions[userId];
-    if (session == null) {
-      // Create temporary session for configuration
-      session = QuizSession(
-        userId: userId,
-        quiz: Quiz(questions: []), // Empty quiz
-        pendingRawText: rawText,
-      );
-      _sessions[userId] = session;
-    } else {
-      session.pendingRawText = rawText;
-    }
-  }
-
-  /// Update pending subject name
-  void setPendingSubjectName(int userId, String subjectName) {
-    final session = _sessions[userId];
-    if (session != null) {
-      session.pendingSubjectName = subjectName;
-    }
-  }
 
   /// Update pending shuffle choice
   void setPendingShuffleChoice(int userId, bool shuffle) {
@@ -160,5 +142,34 @@ class QuizSessionManager {
     if (session != null) {
       session.pendingShuffleChoice = shuffle;
     }
+  }
+
+  // ==================== SUPABASE UCHUN QOSHIMCHA METODLAR ====================
+
+  /// Fayl nomini saqlash
+  void setFileName(int userId, String fileName) {
+    _fileNames[userId] = fileName;
+  }
+
+  /// Fayl nomini olish
+  String? getFileName(int userId) {
+    return _fileNames[userId];
+  }
+
+  /// Quiz ID ni saqlash (Supabase dan)
+  void setQuizId(int userId, int quizId) {
+    _quizIds[userId] = quizId;
+  }
+
+  /// Quiz ID ni olish
+  int? getQuizId(int userId) {
+    return _quizIds[userId];
+  }
+
+  /// Session ma'lumotlarini to'liq tozalash
+  void clearUserData(int userId) {
+    endSession(userId);
+    _fileNames.remove(userId);
+    _quizIds.remove(userId);
   }
 }

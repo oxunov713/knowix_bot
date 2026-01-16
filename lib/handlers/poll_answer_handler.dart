@@ -1,18 +1,14 @@
 import 'package:televerse/telegram.dart';
 import 'package:televerse/televerse.dart';
 import '../services/quiz_session_manager.dart';
+import '../services/supabase_service.dart';
 
-/// Poll javoblarini boshqaruvchi
+/// Poll javoblarini boshqaruvchi (Supabase integratsiyasi bilan)
 class PollAnswerHandler {
   final QuizSessionManager sessionManager;
+  final SupabaseService supabaseService;
 
-  PollAnswerHandler(this.sessionManager);
-
-  /// Matnni qisqartirish
-  String _truncateOption(String text, int maxLength) {
-    if (text.length <= maxLength) return text;
-    return '${text.substring(0, maxLength - 3)}...';
-  }
+  PollAnswerHandler(this.sessionManager, this.supabaseService);
 
   /// Poll javobini boshqarish
   Future<void> handlePollAnswer(Context ctx) async {
@@ -99,8 +95,7 @@ class PollAnswerHandler {
 
       await ctx.answerCallbackQuery(text: 'Test davom ettirilmoqda...');
       await ctx.editMessageText(
-        '▶️ *Test davom ettirilmoqda...*\n\n'
-            '💪 Omad tilaymiz!',
+        '▶️ *Test davom ettirilmoqda...*\n\n💪 Omad tilaymiz!',
         parseMode: ParseMode.markdown,
       );
 
@@ -119,7 +114,7 @@ class PollAnswerHandler {
     }
   }
 
-  /// Keyingi savolni yuborish
+  /// Keyingi savolni yuborish - FIXED
   Future<void> _sendNextQuestion(Context ctx, int userId) async {
     final session = sessionManager.getSession(userId);
     if (session == null || session.isCompleted) return;
@@ -127,27 +122,34 @@ class PollAnswerHandler {
     final question = session.currentQuestion;
     final quiz = session.quiz;
 
-    final questionText = _truncateOption(question.text, 300);
+    // FIXED: Explicit type casting
+    final List<InputPollOption> pollOptions = [];
+    for (final opt in question.options) {
+      pollOptions.add(InputPollOption(text: _truncate(opt, 100)));
+    }
 
-    final pollOptions = question.options
-        .map((opt) => InputPollOption(text: _truncateOption(opt, 100)))
-        .toList()
-        .cast<InputPollOption>();
+    try {
+      final pollMessage = await ctx.api.sendPoll(
+        ChatID(userId),
+        '${session.progress} | ${_truncate(question.text, 300)}',
+        pollOptions,
+        isAnonymous: false,
+        type: PollType.quiz,
+        correctOptionId: question.correctOptionIndex,
+        openPeriod: quiz.timePerQuestion > 0 ? quiz.timePerQuestion : null,
+      );
 
-    final pollMessage = await ctx.api.sendPoll(
-      ChatID(userId),
-      '${session.progress} | $questionText',
-      pollOptions,
-      isAnonymous: false,
-      type: PollType.quiz,
-      correctOptionId: question.correctOptionIndex,
-      openPeriod: quiz.timePerQuestion > 0 ? quiz.timePerQuestion : null,
-    );
-
-    sessionManager.updatePollId(userId, pollMessage.poll!.id);
+      sessionManager.updatePollId(userId, pollMessage.poll!.id);
+    } catch (e) {
+      print('❌ Error sending poll: $e');
+      await ctx.api.sendMessage(
+        ChatID(userId),
+        '❌ Savol yuborishda xatolik!\n\nTest to\'xtatildi.',
+      );
+    }
   }
 
-  /// Yakuniy natijalarni yuborish
+  /// Yakuniy natijalarni yuborish (Supabase ga saqlash bilan)
   Future<void> _sendResults(Context ctx, int userId) async {
     final session = sessionManager.endSession(userId);
     if (session == null) return;
@@ -157,6 +159,25 @@ class PollAnswerHandler {
     final total = session.quiz.questions.length;
     final percentage = (score / answeredQuestions * 100);
     final elapsed = session.elapsedTime;
+
+    // Supabase ga natijani saqlash
+    try {
+      final quizId = sessionManager.getQuizId(userId);
+      if (quizId != null) {
+        await supabaseService.saveQuizResult(
+          quizId: quizId,
+          correctAnswers: score,
+          totalAnswered: answeredQuestions,
+          totalQuestions: total,
+          percentage: percentage,
+          elapsedSeconds: elapsed.inSeconds,
+          isCompleted: answeredQuestions == total,
+        );
+        print('✅ Quiz result saved to Supabase');
+      }
+    } catch (e) {
+      print('⚠️ Error saving result to Supabase: $e');
+    }
 
     String emoji;
     String message;
@@ -191,7 +212,6 @@ class PollAnswerHandler {
         ? '✅ Test yakunlandi!'
         : '🏁 Test to\'xtatildi!';
 
-    // Baho hisobini aniqlash (5 ball tizimida)
     final gradeValue = (percentage / 20).floorToDouble();
     final grade = gradeValue >= 4.5 ? '5' :
     gradeValue >= 3.5 ? '4' :
@@ -211,8 +231,15 @@ class PollAnswerHandler {
           '${session.quiz.subjectName != null ? "📚 Fan: *${session.quiz.subjectName}*\n" : ""}'
           '\n━━━━━━━━━━━━━━━━━\n'
           '$message $level\n\n'
-          '🔄 Yangi test uchun: /start',
+          '📚 Quizlarim: /quizlarim\n'
+          '📊 Statistikam: /statistika\n'
+          '🔄 Yangi test: /start',
       parseMode: ParseMode.markdown,
     );
+  }
+
+  String _truncate(String text, int maxLength) {
+    if (text.length <= maxLength) return text;
+    return '${text.substring(0, maxLength - 3)}...';
   }
 }
