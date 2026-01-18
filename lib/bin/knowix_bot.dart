@@ -8,7 +8,7 @@ void main() async {
   // final botToken = Platform.environment['BOT_TOKEN'];
   // final supabaseUrl = Platform.environment['SUPABASE_URL'];
   // final supabaseKey = Platform.environment['SUPABASE_ANON_KEY'];
-  final token = "8338523756:AAG9p6Wz5O3Z4fQ0gq3vvj5AgRYsDQqhzQw";
+  final token = "8338523756:AAFt5yv6KW8uyR6bPDNuU9CPR-7w3KjJvYU";
   final supabaseUrl ="https://kcqjxkswvzxuobrqukxa.supabase.co";
   final supabaseKey =
 
@@ -40,8 +40,8 @@ void main() async {
     );
 
     // ✅ Start bot with retry
+    await bot.start();
 
-await bot.stop();
     // ✅ Setup graceful shutdown
     _setupGracefulShutdown(bot);
 
