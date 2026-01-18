@@ -8,6 +8,9 @@ class PollAnswerHandler {
   final QuizSessionManager sessionManager;
   final SupabaseService supabaseService;
 
+  // Track last processed poll to prevent duplicates
+  final Map<int, String> _lastProcessedPoll = {};
+
   PollAnswerHandler(this.sessionManager, this.supabaseService);
 
   /// Handle poll answer with comprehensive error handling
@@ -36,30 +39,44 @@ class PollAnswerHandler {
         return;
       }
 
-      // FIXED: Check if this is the correct poll
-      final currentPollId = sessionManager.getCurrentPollId(userId);
-      if (currentPollId != null && pollAnswer.pollId != currentPollId) {
-        print('⚠️ Old poll answer ignored for user $userId');
+      // ✅ FIX 1: Prevent duplicate poll processing
+      final currentPollId = pollAnswer.pollId;
+      if (_lastProcessedPoll[userId] == currentPollId) {
+        print('⚠️ Duplicate poll answer ignored for user $userId');
         return;
       }
+
+      // ✅ FIX 2: Validate poll belongs to current question
+      final expectedPollId = sessionManager.getCurrentPollId(userId);
+      if (expectedPollId != null && currentPollId != expectedPollId) {
+        print('⚠️ Old poll answer ignored for user $userId (expected: $expectedPollId, got: $currentPollId)');
+        return;
+      }
+
+      // Mark poll as processed
+      _lastProcessedPoll[userId] = currentPollId;
 
       final question = session.currentQuestion;
       final isCorrect = pollAnswer.optionIds.contains(question.correctOptionIndex);
 
       if (isCorrect) {
         sessionManager.recordCorrectAnswer(userId);
-        print('✅ User $userId answered correctly');
+        print('✅ User $userId answered correctly (${session.correctAnswers}/${session.currentQuestionIndex + 1})');
       } else {
         sessionManager.recordWrongAnswer(userId);
         print('❌ User $userId answered incorrectly');
       }
 
-      // FIXED: Move to next question BEFORE checking completion
+      // ✅ FIX 3: Add delay before moving to next question
+      await Future.delayed(Duration(milliseconds: 500));
+
+      // Move to next question
       final hasMore = sessionManager.nextQuestion(userId);
 
       // Check if quiz is completed
       if (session.isCompleted || !hasMore) {
         print('🏁 Quiz completed for user $userId');
+        _lastProcessedPoll.remove(userId); // Cleanup
         await _sendResults(ctx, userId);
         return;
       }
@@ -71,8 +88,8 @@ class PollAnswerHandler {
         return;
       }
 
-      // FIXED: Add small delay before sending next question
-      await Future.delayed(Duration(milliseconds: 300));
+      // ✅ FIX 4: Add delay before sending next question
+      await Future.delayed(Duration(milliseconds: 800));
 
       // Send next question
       await _sendNextQuestion(ctx, userId);
@@ -83,6 +100,7 @@ class PollAnswerHandler {
       try {
         final userId = ctx.pollAnswer?.user?.id;
         if (userId != null) {
+          _lastProcessedPoll.remove(userId); // Cleanup on error
           await ctx.api.sendMessage(
             ChatID(userId),
             '❌ *Xatolik yuz berdi!*\n\n'
@@ -146,6 +164,7 @@ class PollAnswerHandler {
 
       if (data == 'quiz_continue') {
         sessionManager.resetMissedCount(userId);
+        _lastProcessedPoll.remove(userId); // Reset tracking
 
         await ctx.answerCallbackQuery(text: 'Test davom ettirilmoqda...');
 
@@ -165,6 +184,7 @@ class PollAnswerHandler {
           parseMode: ParseMode.markdown,
         );
 
+        _lastProcessedPoll.remove(userId); // Cleanup
         await Future.delayed(Duration(milliseconds: 500));
         await _sendResults(ctx, userId);
       }
@@ -197,12 +217,19 @@ class PollAnswerHandler {
       final question = session.currentQuestion;
       final quiz = session.quiz;
 
+      // ✅ FIX 5: Validate question before sending
       if (question.options.length < 2) {
         print('❌ Invalid question: less than 2 options');
         throw Exception('Savol noto\'g\'ri: kamida 2 ta variant bo\'lishi kerak');
       }
 
-      // FIXED: Validate options before creating poll
+      if (question.correctOptionIndex < 0 ||
+          question.correctOptionIndex >= question.options.length) {
+        print('❌ Invalid correct index: ${question.correctOptionIndex}');
+        throw Exception('Noto\'g\'ri javob indeksi: ${question.correctOptionIndex}');
+      }
+
+      // Create poll options
       final List<InputPollOption> pollOptions = [];
       for (int i = 0; i < question.options.length; i++) {
         final optionText = _truncate(question.options[i], 100);
@@ -212,34 +239,58 @@ class PollAnswerHandler {
         pollOptions.add(InputPollOption(text: optionText));
       }
 
-      // FIXED: Validate correct option index
-      if (question.correctOptionIndex < 0 ||
-          question.correctOptionIndex >= question.options.length) {
-        throw Exception('Noto\'g\'ri javob indeksi: ${question.correctOptionIndex}');
-      }
-
-      print('📤 Sending question ${session.currentQuestionIndex + 1} to user $userId');
-
-      // FIXED: Set openPeriod only if valid (5-600 seconds)
+      // ✅ FIX 6: Validate and fix openPeriod (5-600 seconds)
       int? openPeriod;
       if (quiz.timePerQuestion > 0) {
-        openPeriod = quiz.timePerQuestion.clamp(5, 600);
+        if (quiz.timePerQuestion < 5) {
+          openPeriod = 5; // Minimum 5 seconds
+          print('⚠️ Time adjusted to minimum: 5s');
+        } else if (quiz.timePerQuestion > 600) {
+          openPeriod = 600; // Maximum 600 seconds (10 minutes)
+          print('⚠️ Time adjusted to maximum: 600s');
+        } else {
+          openPeriod = quiz.timePerQuestion;
+        }
       }
 
-      final pollMessage = await ctx.api.sendPoll(
-        ChatID(userId),
-        '${session.progress} | ${_truncate(question.text, 300)}',
-        pollOptions,
-        isAnonymous: false,
-        type: PollType.quiz,
-        correctOptionId: question.correctOptionIndex,
-        openPeriod: openPeriod,
+      print('📤 Sending question ${session.currentQuestionIndex + 1}/${quiz.questions.length} to user $userId');
 
-      );
+      // ✅ FIX 7: Add retry logic for poll sending
+      Message? pollMessage;
+      int retries = 0;
+      const maxRetries = 3;
 
-      // FIXED: Always update poll ID
-      if (pollMessage.poll != null) {
-        sessionManager.updatePollId(userId, pollMessage.poll!.id);
+      while (retries < maxRetries) {
+        try {
+          pollMessage = await ctx.api.sendPoll(
+            ChatID(userId),
+            '${session.progress} | ${_truncate(question.text, 300)}',
+            pollOptions,
+            isAnonymous: false,
+            type: PollType.quiz,
+            correctOptionId: question.correctOptionIndex,
+            openPeriod: openPeriod,
+          ).timeout(
+            Duration(seconds: 10),
+            onTimeout: () {
+              throw Exception('Poll yuborish timeout');
+            },
+          );
+
+          break; // Success
+        } catch (e) {
+          retries++;
+          if (retries >= maxRetries) {
+            throw Exception('Poll yuborish muvaffaqiyatsiz ($maxRetries urinish): $e');
+          }
+          print('⚠️ Retry ${retries}/$maxRetries for user $userId: $e');
+          await Future.delayed(Duration(seconds: 1 * retries));
+        }
+      }
+
+      // Update poll ID
+      if (pollMessage?.poll != null) {
+        sessionManager.updatePollId(userId, pollMessage!.poll!.id);
         print('✅ Question sent successfully. Poll ID: ${pollMessage.poll!.id}');
       } else {
         print('⚠️ Poll message sent but poll is null');
@@ -250,7 +301,6 @@ class PollAnswerHandler {
       print('Stack trace: $stack');
 
       try {
-        // FIXED: Check if session still exists before ending
         final session = sessionManager.getSession(userId);
         if (session != null) {
           await ctx.api.sendMessage(
@@ -284,11 +334,12 @@ class PollAnswerHandler {
           : 0.0;
       final elapsed = session.elapsedTime;
 
-      // Save to Supabase
+      // ✅ FIX 8: Make Supabase save non-blocking
       try {
         final quizId = sessionManager.getQuizId(userId);
         if (quizId != null) {
-          await supabaseService.saveQuizResult(
+          // Run in background without blocking results
+          supabaseService.saveQuizResult(
             quizId: quizId,
             correctAnswers: score,
             totalAnswered: answeredQuestions,
@@ -296,12 +347,14 @@ class PollAnswerHandler {
             percentage: percentage,
             elapsedSeconds: elapsed.inSeconds,
             isCompleted: answeredQuestions == total,
-          );
-          print('✅ Quiz result saved to Supabase');
+          ).then((_) {
+            print('✅ Quiz result saved to Supabase');
+          }).catchError((e) {
+            print('⚠️ Failed to save result to Supabase: $e');
+          });
         }
       } catch (e) {
-        print('⚠️ Failed to save result to Supabase: $e');
-        // Don't fail the whole function if Supabase fails
+        print('⚠️ Failed to initiate Supabase save: $e');
       }
 
       // Determine grade and message

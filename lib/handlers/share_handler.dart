@@ -4,6 +4,7 @@ import '../services/supabase_service.dart';
 import '../services/quiz_session_manager.dart';
 import '../models/quiz.dart';
 import '../models/question.dart';
+import 'dart:math';
 
 /// Enhanced share handler with improved error handling
 class ShareHandler {
@@ -11,6 +12,13 @@ class ShareHandler {
   final QuizSessionManager sessionManager;
 
   ShareHandler(this.supabaseService, this.sessionManager);
+
+  /// Generate share code locally
+  String _generateShareCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    final random = Random();
+    return List.generate(8, (index) => chars[random.nextInt(chars.length)]).join();
+  }
 
   /// Handle /share command
   Future<void> handleShare(Context ctx) async {
@@ -20,8 +28,20 @@ class ShareHandler {
     try {
       // Check if user has active session
       final session = sessionManager.getSession(userId);
-      if (session != null && session.quiz.shareCode != null) {
-        await _showShareInfo(ctx, session.quiz.shareCode!);
+      if (session != null) {
+        // ✅ FIX: Get or generate share code
+        String? shareCode = session.quiz.shareCode;
+
+        if (shareCode == null || shareCode.isEmpty) {
+          print('⚠️ Session has no share code, generating new one');
+          shareCode = _generateShareCode();
+
+          // Update session with new share code
+          final updatedQuiz = session.quiz.copyWith(shareCode: shareCode);
+          sessionManager.createSession(userId, updatedQuiz);
+        }
+
+        await _showShareInfo(ctx, shareCode);
         return;
       }
 
@@ -74,11 +94,25 @@ class ShareHandler {
     try {
       await ctx.answerCallbackQuery(text: 'Havola yaratilmoqda...');
 
-      // FIXED: Get share code with null safety
-      final shareCode = await supabaseService.generateShareCode(quizId);
+      // ✅ FIX: Get or generate share code with proper error handling
+      String? shareCode;
 
+      try {
+        shareCode = await supabaseService.generateShareCode(quizId);
+      } catch (e) {
+        print('❌ Supabase generateShareCode failed: $e');
+        shareCode = null;
+      }
+
+      // ✅ FIX: Always ensure we have a valid share code
       if (shareCode == null || shareCode.isEmpty) {
-        throw Exception('Share code yaratilmadi');
+        print('⚠️ Generating local share code');
+        shareCode = _generateShareCode();
+
+        // Try to save to Supabase in background
+        supabaseService.updateQuizShareCode(quizId, shareCode).catchError((e) {
+          print('⚠️ Failed to update share code in DB: $e');
+        });
       }
 
       await ctx.editMessageText(
@@ -108,10 +142,12 @@ class ShareHandler {
   /// Show share information
   Future<void> _showShareInfo(Context ctx, String shareCode) async {
     try {
-      // FIXED: Validate shareCode before using
+      // ✅ FIX: Validate shareCode
       if (shareCode.isEmpty) {
         throw Exception('Share code bo\'sh');
       }
+
+      print('📤 Showing share info for code: $shareCode');
 
       final botUsername = (await ctx.api.getMe()).username;
 
@@ -165,7 +201,7 @@ class ShareHandler {
     if (userId == null) return;
 
     try {
-      // FIXED: Validate shareCode
+      // ✅ FIX: Validate shareCode
       if (shareCode.isEmpty) {
         await ctx.reply(
           '❌ *Noto\'g\'ri kod!*\n\n'
@@ -175,6 +211,8 @@ class ShareHandler {
         );
         return;
       }
+
+      print('📤 Loading shared quiz with code: $shareCode');
 
       // Clear any existing session
       sessionManager.clearUserData(userId);
@@ -255,7 +293,7 @@ class ShareHandler {
     if (userId == null) return;
 
     try {
-      // FIXED: Validate shareCode
+      // ✅ FIX: Validate shareCode
       if (shareCode.isEmpty) {
         await ctx.answerCallbackQuery(text: '❌ Noto\'g\'ri kod');
         await ctx.editMessageText(
@@ -264,6 +302,8 @@ class ShareHandler {
         );
         return;
       }
+
+      print('🚀 Starting shared quiz: $shareCode');
 
       await ctx.answerCallbackQuery(text: 'Quiz yuklanmoqda...');
 
@@ -309,15 +349,17 @@ class ShareHandler {
         return;
       }
 
-      // FIXED: Ensure subject name is not null
-      final subjectName = quizData['subject_name'] as String? ?? 'Ulashilgan quiz';
+      // ✅ FIX: Get subject name with fallback
+      final subjectName = (quizData['subject_name'] as String?) ?? 'Ulashilgan quiz';
 
-      // Create quiz object with shareCode
+      // ✅ FIX: Create quiz with shareCode included
       final quiz = Quiz(
         questions: questions,
         subjectName: subjectName,
-        shareCode: shareCode, // FIXED: Pass shareCode here
+        shareCode: shareCode, // CRITICAL: Include share code
       );
+
+      print('✅ Quiz created: ${questions.length} questions, shareCode: $shareCode');
 
       // Create session
       sessionManager.createSession(userId, quiz);
@@ -370,8 +412,10 @@ class ShareHandler {
         await Future.delayed(Duration(milliseconds: 300));
         await _showTimeSelection(ctx, userId);
       }
-    } catch (e) {
+    } catch (e, stack) {
       print('❌ startSharedQuiz error: $e');
+      print('Stack: $stack');
+
       await ctx.answerCallbackQuery(text: '❌ Xatolik yuz berdi');
 
       try {

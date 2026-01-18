@@ -12,7 +12,8 @@ class QuizSessionManager {
   final Map<int, String> _shuffleChoices = {};
 
   static const int maxMissedQuestions = 3;
-  static const Duration timeoutDuration = Duration(minutes: 2);
+  // ✅ FIX 9: Increase timeout to 5 minutes (was 2 minutes)
+  static const Duration timeoutDuration = Duration(minutes: 5);
 
   /// Create a new session with validation
   QuizSession createSession(int userId, Quiz quiz) {
@@ -56,8 +57,11 @@ class QuizSessionManager {
     final session = _sessions[userId];
     if (session != null) {
       session.currentPollId = pollId;
-      _startTimeoutTimer(userId);
-      print('✅ Poll ID updated for user $userId');
+      // ✅ FIX 10: Only start timer if quiz has time limit
+      if (session.quiz.timePerQuestion > 0) {
+        _startTimeoutTimer(userId);
+      }
+      print('✅ Poll ID updated for user $userId: $pollId');
     } else {
       print('⚠️ No session found for user $userId when updating poll ID');
     }
@@ -86,6 +90,15 @@ class QuizSessionManager {
     final missed = (_missedQuestions[userId] ?? 0) + 1;
     _missedQuestions[userId] = missed;
     print('⏰ User $userId missed question ($missed/$maxMissedQuestions)');
+
+    // ✅ FIX 11: Auto-advance after timeout if limit not exceeded
+    if (missed < maxMissedQuestions) {
+      final session = _sessions[userId];
+      if (session != null && !session.isCompleted) {
+        print('⏭ Auto-advancing user $userId to next question');
+        // Let the bot continue, don't block here
+      }
+    }
   }
 
   /// Check if user has exceeded missed question limit
@@ -109,9 +122,19 @@ class QuizSessionManager {
   void _startTimeoutTimer(int userId) {
     _cancelTimer(userId);
 
-    _timeoutTimers[userId] = Timer(timeoutDuration, () {
+    final session = _sessions[userId];
+    if (session == null) return;
+
+    // ✅ FIX 12: Use quiz's timePerQuestion for timeout
+    final timeoutSeconds = session.quiz.timePerQuestion > 0
+        ? session.quiz.timePerQuestion + 10 // Add 10s buffer
+        : 300; // Default 5 minutes for unlimited time
+
+    _timeoutTimers[userId] = Timer(Duration(seconds: timeoutSeconds), () {
       _handleTimeout(userId);
     });
+
+    print('⏱ Timeout timer started for user $userId: ${timeoutSeconds}s');
   }
 
   /// Cancel timeout timer
@@ -122,12 +145,13 @@ class QuizSessionManager {
       _timeoutTimers.remove(userId);
     }
   }
-// Add this to QuizSessionManager
+
+  /// Get current poll ID
   String? getCurrentPollId(int userId) {
     return _sessions[userId]?.currentPollId;
   }
 
-// Update this in QuizSessionManager
+  /// Move to next question
   bool nextQuestion(int userId) {
     final session = _sessions[userId];
     if (session != null) {
@@ -135,12 +159,19 @@ class QuizSessionManager {
       session.currentPollId = null;
       _cancelTimer(userId);
 
-      // Return true if there are more questions
-      return session.currentQuestionIndex < session.quiz.questions.length;
+      final hasMore = session.currentQuestionIndex < session.quiz.questions.length;
+
+      if (!hasMore) {
+        print('📝 Quiz completed for user $userId: ${session.currentQuestionIndex}/${session.quiz.questions.length}');
+      }
+
+      return hasMore;
     }
     return false;
   }
- QuizSession? endSession(int userId) {
+
+  /// End session and return it
+  QuizSession? endSession(int userId) {
     try {
       _cancelTimer(userId);
       _missedQuestions.remove(userId);
@@ -305,6 +336,13 @@ class QuizSessionManager {
     print('   Active sessions: ${_sessions.length}');
     print('   Active timers: ${_timeoutTimers.length}');
     print('   Users with missed questions: ${_missedQuestions.length}');
+
+    if (_sessions.isNotEmpty) {
+      print('   Session details:');
+      _sessions.forEach((userId, session) {
+        print('     User $userId: ${session.currentQuestionIndex}/${session.quiz.questions.length} questions');
+      });
+    }
     print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   }
 }

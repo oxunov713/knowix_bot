@@ -1,10 +1,12 @@
 import 'package:supabase/supabase.dart';
+import 'dart:math';
 
 /// Enhanced Supabase service with share functionality
 class SupabaseService {
   late final SupabaseClient _client;
   static SupabaseService? _instance;
   static const int MAX_STORED_QUIZZES_PER_USER = 5;
+  bool _initialized = false; // ✅ Track initialization
 
   SupabaseService._internal();
 
@@ -16,9 +18,11 @@ class SupabaseService {
     try {
       _client = SupabaseClient(supabaseUrl, supabaseKey);
       await _client.from('users').select('id').limit(1);
+      _initialized = true; // ✅ Mark as initialized
       print('✅ Supabase initialized');
     } catch (e) {
       print('❌ Supabase init error: $e');
+      _initialized = false;
       rethrow;
     }
   }
@@ -241,18 +245,53 @@ class SupabaseService {
     }
   }
 
-  // ==================== SHARE FUNCTIONALITY ====================
+  // ==================== SHARE FUNCTIONALITY (IMPROVED) ====================
 
-  Future<String> generateShareCode(int quizId) async {
+  /// ✅ NEW: Update quiz share code (for fallback)
+  Future<void> updateQuizShareCode(int quizId, String shareCode) async {
     try {
-      final quizData = await _client
+      if (!_initialized) {
+        print('⚠️ Supabase not initialized, skipping share code update');
+        return;
+      }
+
+      await _client.from('quizzes').update({
+        'share_code': shareCode,
+        'is_public': true,
+      }).eq('id', quizId);
+
+      print('✅ Share code updated for quiz $quizId: $shareCode');
+    } catch (e) {
+      print('❌ Error updating share code: $e');
+      rethrow;
+    }
+  }
+
+  /// ✅ IMPROVED: Generate share code with null safety
+  Future<String?> generateShareCode(int quizId) async {
+    try {
+      if (!_initialized) {
+        print('⚠️ Supabase not initialized, returning null');
+        return null;
+      }
+
+      // Check if quiz already has a share code
+      final existing = await _client
           .from('quizzes')
           .select('share_code')
           .eq('id', quizId)
-          .single();
+          .maybeSingle();
 
-      if (quizData['share_code'] != null) {
-        return quizData['share_code'] as String;
+      if (existing == null) {
+        print('⚠️ Quiz $quizId not found');
+        return null;
+      }
+
+      // Return existing code if available
+      final existingCode = existing['share_code'];
+      if (existingCode != null && existingCode.toString().isNotEmpty) {
+        print('✅ Using existing share code: $existingCode');
+        return existingCode as String;
       }
 
       // Generate new share code
@@ -263,31 +302,40 @@ class SupabaseService {
         'is_public': true,
       }).eq('id', quizId);
 
-      print('✅ Share code generated: $shareCode');
+      print('✅ Generated new share code for quiz $quizId: $shareCode');
       return shareCode;
     } catch (e) {
       print('❌ Error generating share code: $e');
-      rethrow;
+      return null; // ✅ Return null instead of throwing
     }
   }
 
+  /// ✅ IMPROVED: Better random code generation
   String _generateUniqueCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    final random = DateTime.now().millisecondsSinceEpoch;
-    var code = '';
-
-    for (int i = 0; i < 8; i++) {
-      code += chars[(random + i) % chars.length];
-    }
-
-    return code;
+    final random = Random();
+    return List.generate(8, (index) => chars[random.nextInt(chars.length)]).join();
   }
 
+  /// ✅ IMPROVED: Get quiz by share code with better error handling
   Future<Map<String, dynamic>?> getQuizByShareCode(String shareCode) async {
     try {
+      if (!_initialized) {
+        print('⚠️ Supabase not initialized');
+        return null;
+      }
+
+      if (shareCode.isEmpty) {
+        print('⚠️ Empty share code provided');
+        return null;
+      }
+
+      print('🔍 Looking up quiz with share code: $shareCode');
+
+      // ✅ Get quiz with user info
       final quizData = await _client
           .from('quizzes')
-          .select()
+          .select('*, users!inner(username, telegram_id)')
           .eq('share_code', shareCode)
           .eq('is_public', true)
           .maybeSingle();
@@ -299,26 +347,60 @@ class SupabaseService {
 
       final quizId = quizData['id'] as int;
 
+      // Get questions
       final questions = await _client
           .from('quiz_questions')
-          .select()
+          .select('question_text, options, correct_index, question_order')
           .eq('quiz_id', quizId)
           .order('question_order', ascending: true);
 
       final questionsList = List<Map<String, dynamic>>.from(questions as List);
 
+      // ✅ Transform questions to expected format
+      final transformedQuestions = questionsList.map((q) {
+        return {
+          'text': q['question_text'],
+          'options': List<String>.from(q['options'] as List),
+          'correctIndex': q['correct_index'],
+        };
+      }).toList();
+
+      // ✅ Extract username safely
+      String? creatorUsername;
+      if (quizData['users'] != null) {
+        final users = quizData['users'];
+        if (users is Map) {
+          creatorUsername = users['username'] as String?;
+        } else if (users is List && users.isNotEmpty) {
+          final firstUser = users[0] as Map;
+          creatorUsername = firstUser['username'] as String?;
+        }
+      }
+
+      print('✅ Quiz found: ${quizData['subject_name']} (${transformedQuestions.length} questions)');
+
       return {
-        ...quizData,
-        'questions': questionsList,
+        'id': quizData['id'],
+        'subject_name': quizData['subject_name'],
+        'total_questions': quizData['total_questions'],
+        'questions': transformedQuestions, // ✅ Use transformed questions
+        'is_shuffled': quizData['is_shuffled'],
+        'answers_shuffled': quizData['answers_shuffled'],
+        'time_per_question': quizData['time_per_question'],
+        'creator_username': creatorUsername ?? 'Unknown',
+        'has_stored_questions': transformedQuestions.isNotEmpty,
       };
-    } catch (e) {
+    } catch (e, stack) {
       print('❌ Error getting quiz by share code: $e');
+      print('Stack: $stack');
       return null;
     }
   }
 
   Future<void> incrementQuizShares(int quizId) async {
     try {
+      if (!_initialized) return;
+
       await _client.rpc('increment_quiz_shares', params: {'p_quiz_id': quizId});
     } catch (e) {
       print('⚠️ Error incrementing shares: $e');
@@ -512,5 +594,6 @@ class SupabaseService {
 
   void dispose() {
     _instance = null;
+    _initialized = false;
   }
 }

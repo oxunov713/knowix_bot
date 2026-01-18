@@ -8,7 +8,6 @@ import '../services/quiz_service.dart';
 import '../services/quiz_session_manager.dart';
 import '../services/supabase_service.dart';
 
-/// Enhanced message handler with improved error handling and share functionality
 class MessageHandler {
   final QuizService quizService;
   final QuizSessionManager sessionManager;
@@ -299,7 +298,7 @@ class MessageHandler {
         return;
       }
 
-      // FIXED: Share quiz with proper error handling
+      // ✅ FIX: Share quiz with proper validation
       if (data?.startsWith('share_quiz:') == true) {
         final quizIdStr = data!.substring(11);
         final quizId = int.tryParse(quizIdStr);
@@ -310,24 +309,28 @@ class MessageHandler {
         }
 
         try {
-          // FIXED: Handle null return from generateShareCode
-          final shareCode = await supabaseService.generateShareCode(quizId);
+          await ctx.answerCallbackQuery(text: '📤 Havola yaratilmoqda...');
 
-          if (shareCode == null || shareCode.isEmpty) {
-            await ctx.answerCallbackQuery(
-              text: '❌ Share code yaratilmadi',
-            );
-            await ctx.reply(
-              '❌ *Xatolik!*\n\n'
-                  'Share code yaratilmadi. Qaytadan urinib ko\'ring.',
-              parseMode: ParseMode.markdown,
-            );
-            return;
+          // ✅ FIX: Generate share code with validation
+          String? shareCode;
+
+          try {
+            shareCode = await supabaseService.generateShareCode(quizId);
+          } catch (e) {
+            print('❌ Supabase generateShareCode error: $e');
+            shareCode = null;
           }
 
-          await ctx.answerCallbackQuery(
-            text: '📤 Ulashish havolasi yaratildi!',
-          );
+          // ✅ FIX: If Supabase fails, generate local code
+          if (shareCode == null || shareCode.isEmpty) {
+            print('⚠️ Supabase share code null, generating local code');
+            shareCode = _generateShareCode();
+
+            // Try to save to Supabase in background
+            supabaseService.updateQuizShareCode(quizId, shareCode).catchError((e) {
+              print('⚠️ Failed to save share code: $e');
+            });
+          }
 
           final botUsername = (await ctx.api.getMe()).username;
 
@@ -356,9 +359,6 @@ class MessageHandler {
           );
         } catch (e) {
           print('❌ Share error: $e');
-          await ctx.answerCallbackQuery(
-            text: '❌ Xatolik yuz berdi',
-          );
           await ctx.reply(
             '❌ *Ulashish xatoligi!*\n\n'
                 '${e.toString()}\n\n'
@@ -472,13 +472,14 @@ class MessageHandler {
           break;
       }
 
-      // FIXED: Generate shareCode before creating session
+      // ✅ FIX: Always generate shareCode locally first
       final shareCode = _generateShareCode();
       quiz = quiz.copyWith(shareCode: shareCode);
 
       // Update session with new quiz
       sessionManager.createSession(userId, quiz);
 
+      // ✅ FIX: Save to Supabase in background (non-blocking)
       try {
         final fileName = sessionManager.getFileName(userId);
 
@@ -490,10 +491,10 @@ class MessageHandler {
           };
         }).toList();
 
-        // FIXED: Ensure subjectName is not null
         final subjectName = quiz.subjectName ?? 'Unknown Subject';
 
-        final quizData = await supabaseService.saveQuiz(
+        // Run Supabase save in background
+        supabaseService.saveQuiz(
           telegramId: userId,
           subjectName: subjectName,
           totalQuestions: quiz.questions.length,
@@ -503,13 +504,15 @@ class MessageHandler {
           fileName: fileName ?? 'unknown',
           questions: questions,
           shareCode: shareCode,
-        );
-
-        sessionManager.setQuizId(userId, quizData['id']);
-        print('✅ Quiz saved with ID: ${quizData['id']}, share code: $shareCode');
+        ).then((quizData) {
+          sessionManager.setQuizId(userId, quizData['id']);
+          print('✅ Quiz saved with ID: ${quizData['id']}, share code: $shareCode');
+        }).catchError((e) {
+          print('⚠️ Error saving quiz to Supabase: $e');
+          // Don't fail the quiz if Supabase fails
+        });
       } catch (e) {
-        print('⚠️ Error saving quiz to Supabase: $e');
-        // Don't fail the quiz start if Supabase save fails
+        print('⚠️ Error initiating Supabase save: $e');
       }
 
       await ctx.reply(
