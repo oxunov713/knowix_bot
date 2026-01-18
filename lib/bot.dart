@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:televerse/televerse.dart';
 
 import 'handlers/message_handler.dart';
@@ -18,16 +19,20 @@ class QuizBot {
   late final UpdateHandler _updateHandler;
   bool _isRunning = false;
   int _messageCount = 0;
+  Timer? _reconnectTimer;
+  int _reconnectAttempts = 0;
+  static const int maxReconnectAttempts = 5;
 
   QuizBot(String token, String supabaseUrl, String supabaseKey) {
     print('🔧 [QuizBot] Initializing...');
 
     try {
+      // ✅ FIX: Better LongPolling configuration
       _bot = Bot(
         token,
         fetcher: LongPolling(
-          limit: 100,
-          timeout: 30,
+          limit: 50, // ✅ Reduced from 100 (less load)
+          timeout: 25, // ✅ Reduced from 30 (faster recovery)
           allowedUpdates: [
             UpdateType.message,
             UpdateType.callbackQuery,
@@ -87,7 +92,7 @@ class QuizBot {
     }
   }
 
-  /// Start the bot
+  /// Start the bot with auto-reconnect
   Future<void> start() async {
     if (_isRunning) {
       print('⚠️  [QuizBot] Already running');
@@ -109,6 +114,7 @@ class QuizBot {
       print('🆔 [QuizBot] Bot ID: ${me.id}');
 
       _isRunning = true;
+      _reconnectAttempts = 0;
 
       // Message counter with logging
       _bot.onMessage((ctx) {
@@ -127,15 +133,8 @@ class QuizBot {
 
       print('🚀 [QuizBot] Starting polling...');
 
-      // Start polling with error handling
-      _bot.start().then((_) {
-        print('⚠️  [QuizBot] Polling ended normally');
-        _isRunning = false;
-      }).catchError((e, stack) {
-        print('❌ [QuizBot] Polling error: $e');
-        print('Stack trace: $stack');
-        _isRunning = false;
-      });
+      // ✅ FIX: Start polling with error recovery
+      _startPollingWithRecovery();
 
       print('✅ [QuizBot] Bot is now running!');
       _printBotInfo();
@@ -144,8 +143,62 @@ class QuizBot {
       print('❌ [QuizBot] Start failed: $e');
       print('Stack trace: $stack');
       _isRunning = false;
-      rethrow;
+
+      // ✅ Auto-retry on start failure
+      if (_reconnectAttempts < maxReconnectAttempts) {
+        _scheduleReconnect();
+      }
     }
+  }
+
+  /// ✅ NEW: Start polling with automatic recovery
+  void _startPollingWithRecovery() {
+    _bot.start().then((_) {
+      print('⚠️  [QuizBot] Polling ended normally');
+      _isRunning = false;
+
+      // Auto-reconnect if it wasn't a manual stop
+      if (_reconnectAttempts < maxReconnectAttempts) {
+        _scheduleReconnect();
+      }
+    }).catchError((e, stack) {
+      print('❌ [QuizBot] Polling error: $e');
+      print('Stack trace: $stack');
+      _isRunning = false;
+
+      // ✅ Handle specific errors
+      if (e is SocketException) {
+        print('🌐 [QuizBot] Network error - will retry');
+      } else if (e is TimeoutException) {
+        print('⏰ [QuizBot] Timeout error - will retry');
+      } else if (e.toString().contains('409')) {
+        print('⚠️  [QuizBot] Conflict error (another bot instance?) - stopping');
+        return; // Don't retry on conflict
+      }
+
+      // Auto-reconnect
+      if (_reconnectAttempts < maxReconnectAttempts) {
+        _scheduleReconnect();
+      } else {
+        print('❌ [QuizBot] Max reconnect attempts reached. Manual restart needed.');
+      }
+    });
+  }
+
+  /// ✅ NEW: Schedule reconnection with exponential backoff
+  void _scheduleReconnect() {
+    _reconnectAttempts++;
+
+    // Exponential backoff: 5s, 10s, 20s, 40s, 60s
+    final delaySeconds = (5 * (1 << (_reconnectAttempts - 1))).clamp(5, 60);
+
+    print('🔄 [QuizBot] Reconnecting in ${delaySeconds}s (attempt $_reconnectAttempts/$maxReconnectAttempts)...');
+
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(Duration(seconds: delaySeconds), () {
+      print('🔄 [QuizBot] Attempting reconnection...');
+      start();
+    });
   }
 
   /// Print bot information
@@ -162,6 +215,7 @@ class QuizBot {
     print('   ⏱️  Custom time limits');
     print('   🔄 Pause & resume');
     print('   🛡️  Comprehensive error handling');
+    print('   🔌 Auto-reconnect on network errors');
     print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     print('📡 Waiting for updates...\n');
   }
@@ -172,8 +226,12 @@ class QuizBot {
 
     try {
       _isRunning = false;
+      _reconnectTimer?.cancel();
+      _reconnectAttempts = maxReconnectAttempts; // Prevent auto-reconnect
+
       _sessionManager.clearAll();
       await _bot.stop();
+
       print('✅ [QuizBot] Stopped successfully');
       print('📊 Total messages processed: $_messageCount');
     } catch (e) {
@@ -190,6 +248,7 @@ class QuizBot {
         'bot_running': _isRunning,
         'active_sessions': _sessionManager.sessionCount,
         'total_messages': _messageCount,
+        'reconnect_attempts': _reconnectAttempts,
         'uptime_seconds': DateTime.now().millisecondsSinceEpoch ~/ 1000,
         ...supabaseStats,
       };
@@ -199,6 +258,7 @@ class QuizBot {
         'bot_running': _isRunning,
         'active_sessions': _sessionManager.sessionCount,
         'total_messages': _messageCount,
+        'reconnect_attempts': _reconnectAttempts,
         'error': e.toString(),
       };
     }
@@ -229,12 +289,14 @@ class QuizBot {
         'supports_inline_queries': me.supportsInlineQueries,
         'is_running': _isRunning,
         'message_count': _messageCount,
+        'reconnect_attempts': _reconnectAttempts,
       };
     } catch (e) {
       return {
         'error': e.toString(),
         'is_running': _isRunning,
         'message_count': _messageCount,
+        'reconnect_attempts': _reconnectAttempts,
       };
     }
   }
@@ -246,6 +308,7 @@ class QuizBot {
     try {
       await stop();
       await Future.delayed(Duration(seconds: 2));
+      _reconnectAttempts = 0; // Reset counter
       await start();
       print('✅ [QuizBot] Restart complete');
     } catch (e) {
@@ -254,14 +317,33 @@ class QuizBot {
     }
   }
 
+  /// ✅ NEW: Force reconnect
+  Future<void> forceReconnect() async {
+    print('🔄 [QuizBot] Force reconnecting...');
+    _reconnectAttempts = 0;
+    await restart();
+  }
+
   /// Get current status
   String getStatus() {
-    return _isRunning ? 'Running ✅' : 'Stopped ❌';
+    if (_isRunning) {
+      return 'Running ✅';
+    } else if (_reconnectTimer != null && _reconnectTimer!.isActive) {
+      return 'Reconnecting... 🔄';
+    } else {
+      return 'Stopped ❌';
+    }
   }
 
   /// Get session count
   int getSessionCount() {
     return _sessionManager.sessionCount;
+  }
+
+  /// ✅ NEW: Cleanup and dispose
+  void dispose() {
+    _reconnectTimer?.cancel();
+    _sessionManager.clearAll();
   }
 }
 
