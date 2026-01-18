@@ -242,11 +242,15 @@ class ShareHandler {
       final totalQuestions = quizData['total_questions'] ?? 0;
       final creatorName = quizData['creator_username'] ?? 'Foydalanuvchi';
 
+      // ✅ FIX: Escape markdown special characters
+      final escapedSubjectName = _escapeMarkdown(subjectName);
+      final escapedCreatorName = _escapeMarkdown(creatorName);
+
       await ctx.reply(
         '📤 *Ulashilgan quiz!*\n\n'
-            '📚 Fan: *$subjectName*\n'
+            '📚 Fan: *$escapedSubjectName*\n'
             '📊 Savollar: *$totalQuestions ta*\n'
-            '👤 Muallif: @$creatorName\n\n'
+            '👤 Muallif: $escapedCreatorName\n\n'
             '🔀 Sozlamalarni tanlang:',
         parseMode: ParseMode.markdown,
         replyMarkup: InlineKeyboard(
@@ -462,5 +466,29 @@ class ShareHandler {
         parseMode: ParseMode.markdown,
       );
     }
+  }
+
+  /// ✅ NEW: Escape Markdown special characters
+  String _escapeMarkdown(String text) {
+    // Escape these characters: _ * [ ] ( ) ~ ` > # + - = | { } . !
+    return text
+        .replaceAll('_', '\\_')
+        .replaceAll('*', '\\*')
+        .replaceAll('[', '\\[')
+        .replaceAll(']', '\\]')
+        .replaceAll('(', '\\(')
+        .replaceAll(')', '\\)')
+        .replaceAll('~', '\\~')
+        .replaceAll('`', '\\`')
+        .replaceAll('>', '\\>')
+        .replaceAll('#', '\\#')
+        .replaceAll('+', '\\+')
+        .replaceAll('-', '\\-')
+        .replaceAll('=', '\\=')
+        .replaceAll('|', '\\|')
+        .replaceAll('{', '\\{')
+        .replaceAll('}', '\\}')
+        .replaceAll('.', '\\.')
+        .replaceAll('!', '\\!');
   }
 }
