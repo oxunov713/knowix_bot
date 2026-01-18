@@ -3,8 +3,9 @@ import 'package:televerse/televerse.dart';
 import '../services/supabase_service.dart';
 import '../services/quiz_session_manager.dart';
 import '../models/quiz.dart';
+import '../models/question.dart';
 
-/// Handler for quiz sharing functionality
+/// Enhanced share handler with improved error handling
 class ShareHandler {
   final SupabaseService supabaseService;
   final QuizSessionManager sessionManager;
@@ -19,9 +20,8 @@ class ShareHandler {
     try {
       // Check if user has active session
       final session = sessionManager.getSession(userId);
-
       if (session != null && session.quiz.shareCode != null) {
-        await _showShareOptions(ctx, userId, session.quiz.shareCode!);
+        await _showShareInfo(ctx, session.quiz.shareCode!);
         return;
       }
 
@@ -30,155 +30,169 @@ class ShareHandler {
 
       if (quizzes.isEmpty) {
         await ctx.reply(
-          '📚 *Sizda quizlar yo\'q!*\n\n'
-              'Avval quiz yarating: /start',
+          '❌ *Ulashadigan quizlar yo\'q!*\n\n'
+              'Avval test yarating: /start',
           parseMode: ParseMode.markdown,
         );
         return;
       }
 
-      // Show quiz list for sharing
       final buttons = <List<InlineKeyboardButton>>[];
 
       for (int i = 0; i < quizzes.length && i < 10; i++) {
         final quiz = quizzes[i];
         final quizId = quiz['id'];
         final subjectName = quiz['subject_name'] ?? 'Noma\'lum';
-        final hasStored = quiz['has_stored_questions'] == true;
-
-        if (!hasStored) continue;
+        final totalQuestions = quiz['total_questions'] ?? 0;
 
         buttons.add([
           InlineKeyboardButton(
-            text: '📤 $subjectName',
+            text: '📚 $subjectName ($totalQuestions ta savol)',
             callbackData: 'share_select:$quizId',
           ),
         ]);
       }
 
-      if (buttons.isEmpty) {
-        await ctx.reply(
-          '⚠️ *Ulashish uchun quizlar yo\'q!*\n\n'
-              'Faqat to\'liq saqlangan quizlarni ulashish mumkin.',
-          parseMode: ParseMode.markdown,
-        );
-        return;
-      }
-
       await ctx.reply(
         '📤 *Qaysi quizni ulashmoqchisiz?*\n\n'
-            'Quizni tanlang:',
+            'Tanlang:',
         parseMode: ParseMode.markdown,
         replyMarkup: InlineKeyboard(inlineKeyboard: buttons),
       );
     } catch (e) {
-      print('❌ Share error: $e');
-      await ctx.reply('❌ Xatolik yuz berdi!');
+      print('❌ handleShare error: $e');
+      await ctx.reply(
+        '❌ *Xatolik yuz berdi!*\n\n'
+            'Qaytadan urinib ko\'ring.',
+        parseMode: ParseMode.markdown,
+      );
     }
   }
 
-  /// Handle share selection callback
+  /// Handle share callback
   Future<void> handleShareCallback(Context ctx, int quizId) async {
     try {
-      await ctx.answerCallbackQuery(text: '📤 Ulashish havolasi yaratilmoqda...');
+      await ctx.answerCallbackQuery(text: 'Havola yaratilmoqda...');
 
       final shareCode = await supabaseService.generateShareCode(quizId);
 
+      await ctx.editMessageText(
+        '⏳ Ulashish havolasi tayyorlanmoqda...',
+        parseMode: ParseMode.markdown,
+      );
+
+      await Future.delayed(Duration(milliseconds: 300));
+      await _showShareInfo(ctx, shareCode);
+    } catch (e) {
+      print('❌ handleShareCallback error: $e');
+      await ctx.answerCallbackQuery(text: '❌ Xatolik yuz berdi');
+
+      try {
+        await ctx.editMessageText(
+          '❌ *Ulashish havolasi yaratilmadi!*\n\n'
+              'Qaytadan urinib ko\'ring: /share',
+          parseMode: ParseMode.markdown,
+        );
+      } catch (e) {
+        print('❌ Failed to edit message: $e');
+      }
+    }
+  }
+
+  /// Show share information
+  Future<void> _showShareInfo(Context ctx, String shareCode) async {
+    try {
       final botUsername = (await ctx.api.getMe()).username;
       final shareUrl = 'https://t.me/$botUsername?start=quiz_$shareCode';
 
-      final quizData = await supabaseService.getQuizWithQuestions(quizId);
-      final subjectName = quizData?['subject_name'] ?? 'Quiz';
-
-      await ctx.editMessageText(
-        '✅ *Ulashish havolasi yaratildi!*\n\n'
-            '📚 Fan: *$subjectName*\n'
-            '🔗 Havola: `$shareUrl`\n'
-            '📋 Kod: `$shareCode`\n\n'
-            '💡 *Foydalanish:*\n'
-            '   • Havolani do\'stlaringizga yuboring\n'
-            '   • Yoki kodni ulashing\n'
-            '   • Ular aynan shu quizni yechishlari mumkin!\n\n'
-            '📊 Ular o\'z natijalarini ko\'radilar, siz esa o\'zingizni.',
+      await ctx.reply(
+        '📤 *Quiz ulashish havolasi tayyor!*\n\n'
+            '🔗 *Havola:*\n`$shareUrl`\n\n'
+            '📋 *Kod:* `$shareCode`\n\n'
+            '💡 *Qanday ishlaydi:*\n'
+            '1️⃣ Havolani yuboring\n'
+            '2️⃣ Do\'stlaringiz bosadi\n'
+            '3️⃣ Ular sizning quizingizni yechadi!\n\n'
+            '🔄 Kod abadiy amal qiladi',
         parseMode: ParseMode.markdown,
         replyMarkup: InlineKeyboard(
           inlineKeyboard: [
             [
               InlineKeyboardButton(
                 text: '📤 Telegram orqali ulashish',
-                url: 'https://t.me/share/url?url=$shareUrl&text=🎯 $subjectName quizini yeching!',
+                url: 'https://t.me/share/url?url=$shareUrl&text=Bu quizni yeching! 🎯',
               ),
             ],
             [
               InlineKeyboardButton(
-                text: '📋 Havolani nusxalash',
-                callbackData: 'copy_link:$shareUrl',
-              ),
-            ],
-            [
-              InlineKeyboardButton(
-                text: '🔙 Orqaga',
+                text: '🔙 Quizlarimga qaytish',
                 callbackData: 'back_to_quizzes',
               ),
             ],
           ],
         ),
       );
-
-      await supabaseService.incrementQuizShares(quizId);
     } catch (e) {
-      print('❌ Share callback error: $e');
-      await ctx.editMessageText('❌ Xatolik yuz berdi!');
+      print('❌ _showShareInfo error: $e');
+      await ctx.reply(
+        '❌ Havola yaratildi lekin ko\'rsatishda xatolik!\n\n'
+            'Kod: `$shareCode`',
+        parseMode: ParseMode.markdown,
+      );
     }
   }
 
-  /// Handle shared quiz start (via deep link)
+  /// Handle shared quiz start via deep link
   Future<void> handleSharedQuizStart(Context ctx, String shareCode) async {
     final userId = ctx.message?.from?.id;
     if (userId == null) return;
 
     try {
-      await ctx.reply('⏳ Quiz yuklanmoqda...');
+      // Clear any existing session
+      sessionManager.clearUserData(userId);
 
+      // Update user activity
+      try {
+        await supabaseService.updateUserActivity(userId);
+      } catch (e) {
+        print('⚠️ Failed to update activity: $e');
+      }
+
+      // Get quiz by share code
       final quizData = await supabaseService.getQuizByShareCode(shareCode);
 
       if (quizData == null) {
         await ctx.reply(
           '❌ *Quiz topilmadi!*\n\n'
-              'Kod noto\'g\'ri yoki quiz o\'chirilgan.',
+              'Kod noto\'g\'ri yoki quiz o\'chirilgan.\n\n'
+              'Yangi test: /start',
           parseMode: ParseMode.markdown,
         );
         return;
       }
 
-      // Check if user already has this quiz
-      final existingSession = sessionManager.getSession(userId);
-      if (existingSession != null) {
-        sessionManager.endSession(userId);
-      }
-
-      // Create quiz from shared data
-      final quiz = Quiz.fromSupabaseData(quizData);
+      final subjectName = quizData['subject_name'] ?? 'Ulashilgan quiz';
+      final totalQuestions = quizData['total_questions'] ?? 0;
+      final creatorName = quizData['creator_username'] ?? 'Foydalanuvchi';
 
       await ctx.reply(
-        '📚 *Ulashilgan Quiz*\n\n'
-            '📖 Fan: *${quiz.subjectName}*\n'
-            '📊 Savollar: *${quiz.questions.length} ta*\n'
-            '🔀 Aralashtirish: *${quiz.shuffled ? "Ha" : "Yo\'q"}*\n'
-            '🎲 Javoblar: *${quiz.answersShuffled ? "Aralashgan" : "Ketma-ket"}*\n\n'
-            '🚀 Testni boshlaysizmi?',
+        '📤 *Ulashilgan quiz!*\n\n'
+            '📚 Fan: *$subjectName*\n'
+            '📊 Savollar: *$totalQuestions ta*\n'
+            '👤 Muallif: @$creatorName\n\n'
+            '🔀 Sozlamalarni tanlang:',
         parseMode: ParseMode.markdown,
         replyMarkup: InlineKeyboard(
           inlineKeyboard: [
             [
               InlineKeyboardButton(
-                text: '✅ Boshlayman',
+                text: '🚀 Darhol boshlash',
                 callbackData: 'start_shared:$shareCode',
               ),
             ],
             [
               InlineKeyboardButton(
-                text: '🔄 Sozlamalarni o\'zgartirish',
+                text: '⚙️ Sozlamalarni o\'zgartirish',
                 callbackData: 'customize_shared:$shareCode',
               ),
             ],
@@ -192,140 +206,175 @@ class ShareHandler {
         ),
       );
     } catch (e) {
-      print('❌ Shared quiz start error: $e');
-      await ctx.reply('❌ Xatolik yuz berdi!');
+      print('❌ handleSharedQuizStart error: $e');
+      await ctx.reply(
+        '❌ *Xatolik yuz berdi!*\n\n'
+            'Quiz yuklanmadi: ${e.toString()}\n\n'
+            'Qaytadan urinib ko\'ring.',
+        parseMode: ParseMode.markdown,
+      );
     }
   }
 
-  /// Start shared quiz
-  Future<void> startSharedQuiz(Context ctx, String shareCode, {bool customize = false}) async {
-    final userId = ctx.from?.id;
+  /// Start shared quiz with optional customization
+  Future<void> startSharedQuiz(
+      Context ctx,
+      String shareCode, {
+        bool customize = false,
+      }) async {
+    final userId = ctx.callbackQuery?.from.id;
     if (userId == null) return;
 
     try {
+      await ctx.answerCallbackQuery(text: 'Quiz yuklanmoqda...');
+
+      // Get quiz data
       final quizData = await supabaseService.getQuizByShareCode(shareCode);
+
       if (quizData == null) {
-        await ctx.editMessageText('❌ Quiz topilmadi!');
+        await ctx.editMessageText(
+          '❌ *Quiz topilmadi!*\n\n'
+              'Kod noto\'g\'ri yoki quiz o\'chirilgan.',
+          parseMode: ParseMode.markdown,
+        );
         return;
       }
 
-      final quiz = Quiz.fromSupabaseData(quizData);
+      // Check if quiz has stored questions
+      if (quizData['questions'] == null || quizData['questions'].isEmpty) {
+        await ctx.editMessageText(
+          '❌ *Quiz savollari topilmadi!*\n\n'
+              'Bu quiz yaratilganidan keyin savollar o\'chirilgan.\n\n'
+              'Yangi test: /start',
+          parseMode: ParseMode.markdown,
+        );
+        return;
+      }
+
+      // Parse questions
+      final questionsList = quizData['questions'] as List;
+      final questions = questionsList.map((q) {
+        return Question(
+          text: q['text'] as String,
+          options: List<String>.from(q['options'] as List),
+          correctOptionIndex: q['correctIndex'] as int,
+        );
+      }).toList();
+
+      if (questions.isEmpty) {
+        await ctx.editMessageText(
+          '❌ *Savollar noto\'g\'ri formatda!*\n\n'
+              'Bu quizni ishlatib bo\'lmaydi.',
+          parseMode: ParseMode.markdown,
+        );
+        return;
+      }
+
+      // Create quiz object
+      final quiz = Quiz(
+        questions: questions,
+        subjectName: quizData['subject_name'] as String?,
+        shareCode: shareCode,
+      );
+
+      // Create session
+      sessionManager.createSession(userId, quiz);
 
       if (customize) {
-        // Show shuffle options
-        sessionManager.createSession(userId, quiz);
-
+        // Show customization options
         await ctx.editMessageText(
-          '🔀 *Aralashtirishni sozlang:*\n\n'
-              'Asl: ${quiz.shuffled ? "Savollar aralash" : "Ketma-ket"}, '
-              '${quiz.answersShuffled ? "Javoblar aralash" : "Javoblar ketma-ket"}',
+          '⚙️ *Sozlamalarni tanlang:*\n\n'
+              '🔀 Aralashtirishni sozlang:',
           parseMode: ParseMode.markdown,
           replyMarkup: InlineKeyboard(
             inlineKeyboard: [
               [
                 InlineKeyboardButton(
                   text: '🔀 Savollarni aralashtirish',
-                  callbackData: 'customize_q:$shareCode',
+                  callbackData: 'shuffle:questions',
                 ),
               ],
               [
                 InlineKeyboardButton(
                   text: '🎲 Javoblarni aralashtirish',
-                  callbackData: 'customize_a:$shareCode',
+                  callbackData: 'shuffle:answers',
                 ),
               ],
               [
                 InlineKeyboardButton(
                   text: '🔀🎲 Hammasini aralashtirish',
-                  callbackData: 'customize_b:$shareCode',
+                  callbackData: 'shuffle:both',
                 ),
               ],
               [
                 InlineKeyboardButton(
-                  text: '✅ Asl holatda boshlash',
-                  callbackData: 'start_shared:$shareCode',
+                  text: '📋 Aralashtirishsiz',
+                  callbackData: 'shuffle:none',
                 ),
               ],
             ],
           ),
         );
       } else {
-        // Start immediately
-        sessionManager.createSession(userId, quiz);
+        // Start immediately with default settings
+        sessionManager.setShuffleChoice(userId, 'none');
 
         await ctx.editMessageText(
-          '🚀 *Test boshlanmoqda...*',
+          '🚀 *Quiz tayyor!*\n\n'
+              'Vaqtni tanlang:',
           parseMode: ParseMode.markdown,
         );
 
-        await Future.delayed(Duration(milliseconds: 500));
-        await _sendFirstQuestion(ctx, userId);
+        await Future.delayed(Duration(milliseconds: 300));
+        await _showTimeSelection(ctx, userId);
       }
     } catch (e) {
-      print('❌ Start shared quiz error: $e');
-      await ctx.editMessageText('❌ Xatolik yuz berdi!');
+      print('❌ startSharedQuiz error: $e');
+      await ctx.answerCallbackQuery(text: '❌ Xatolik yuz berdi');
+
+      try {
+        await ctx.editMessageText(
+          '❌ *Quiz boshlanmadi!*\n\n'
+              'Xatolik: ${e.toString()}\n\n'
+              'Qaytadan urinib ko\'ring: /start',
+          parseMode: ParseMode.markdown,
+        );
+      } catch (e) {
+        print('❌ Failed to edit message: $e');
+      }
     }
   }
 
-  /// Show share options for current quiz
-  Future<void> _showShareOptions(Context ctx, int userId, String shareCode) async {
-    final botUsername = (await ctx.api.getMe()).username;
-    final shareUrl = 'https://t.me/$botUsername?start=quiz_$shareCode';
-
-    await ctx.reply(
-      '📤 *Faol quizingiz*\n\n'
-          '🔗 Havola: `$shareUrl`\n'
-          '📋 Kod: `$shareCode`\n\n'
-          '💡 Bu quizni do\'stlaringiz bilan ulashing!',
-      parseMode: ParseMode.markdown,
-      replyMarkup: InlineKeyboard(
-        inlineKeyboard: [
-          [
-            InlineKeyboardButton(
-              text: '📤 Telegram orqali ulashish',
-              url: 'https://t.me/share/url?url=$shareUrl&text=Bu quizni yeching!',
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  /// Send first question
-  Future<void> _sendFirstQuestion(Context ctx, int userId) async {
-    final session = sessionManager.getSession(userId);
-    if (session == null) return;
-
-    final question = session.currentQuestion;
-
-    final List<InputPollOption> pollOptions = [];
-    for (final opt in question.options) {
-      pollOptions.add(InputPollOption(text: _truncate(opt, 100)));
-    }
-
+  /// Show time selection for shared quiz
+  Future<void> _showTimeSelection(Context ctx, int userId) async {
     try {
-      await ctx.api.sendPoll(
-        ChatID(userId),
-        '${session.progress} | ${_truncate(question.text, 300)}',
-        pollOptions,
-        isAnonymous: false,
-        type: PollType.quiz,
-        correctOptionId: question.correctOptionIndex,
-        openPeriod: session.quiz.timePerQuestion > 0
-            ? session.quiz.timePerQuestion
-            : null,
+      await ctx.reply(
+        '⏱ *Har bir savol uchun vaqtni tanlang:*',
+        parseMode: ParseMode.markdown,
+        replyMarkup: InlineKeyboard(
+          inlineKeyboard: [
+            [
+              InlineKeyboardButton(text: '⚡️ 10s', callbackData: 'time:10'),
+              InlineKeyboardButton(text: '⏱ 20s', callbackData: 'time:20'),
+              InlineKeyboardButton(text: '🕐 30s', callbackData: 'time:30'),
+            ],
+            [
+              InlineKeyboardButton(text: '⏰ 60s', callbackData: 'time:60'),
+              InlineKeyboardButton(text: '🕰 90s', callbackData: 'time:90'),
+              InlineKeyboardButton(text: '⏳ 120s', callbackData: 'time:120'),
+            ],
+            [
+              InlineKeyboardButton(text: '♾ Cheksiz', callbackData: 'time:0'),
+            ],
+          ],
+        ),
       );
     } catch (e) {
-      print('❌ Error sending question: $e');
-      await ctx.api.sendMessage(
-        ChatID(userId),
-        '❌ Savol yuborishda xatolik!',
+      print('❌ _showTimeSelection error: $e');
+      await ctx.reply(
+        '❌ Xatolik yuz berdi. /start ni bosing.',
+        parseMode: ParseMode.markdown,
       );
     }
-  }
-
-  String _truncate(String text, int maxLength) {
-    if (text.length <= maxLength) return text;
-    return '${text.substring(0, maxLength - 3)}...';
   }
 }

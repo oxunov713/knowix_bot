@@ -9,7 +9,7 @@ import 'services/quiz_service.dart';
 import 'services/quiz_session_manager.dart';
 import 'services/supabase_service.dart';
 
-/// Enhanced Quiz Bot with shuffle and share functionality
+/// Production-ready Quiz Bot with comprehensive error handling
 class QuizBot {
   late final Bot _bot;
   late final QuizService _quizService;
@@ -17,51 +17,63 @@ class QuizBot {
   late final SupabaseService _supabaseService;
   late final UpdateHandler _updateHandler;
   bool _isRunning = false;
+  int _messageCount = 0;
 
   QuizBot(String token, String supabaseUrl, String supabaseKey) {
     print('🔧 [QuizBot] Initializing...');
 
-    _bot = Bot(
-      token,
-      fetcher: LongPolling(
-        limit: 100,
-        timeout: 30,
-      ),
-    );
+    try {
+      _bot = Bot(
+        token,
+        fetcher: LongPolling(
+          limit: 100,
+          timeout: 30,
+          allowedUpdates: [
+            UpdateType.message,
+            UpdateType.callbackQuery,
+            UpdateType.pollAnswer,
+          ],
+        ),
+      );
 
-    _quizService = QuizService();
-    _sessionManager = QuizSessionManager();
-    _supabaseService = SupabaseService();
+      _quizService = QuizService();
+      _sessionManager = QuizSessionManager();
+      _supabaseService = SupabaseService();
 
-    // Initialize Supabase
-    _initializeSupabase(supabaseUrl, supabaseKey);
+      // Initialize Supabase
+      _initializeSupabase(supabaseUrl, supabaseKey);
 
-    // Create handlers
-    final messageHandler = MessageHandler(
-      _quizService,
-      _sessionManager,
-      _supabaseService,
-    );
+      // Create handlers
+      final messageHandler = MessageHandler(
+        _quizService,
+        _sessionManager,
+        _supabaseService,
+      );
 
-    final pollAnswerHandler = PollAnswerHandler(
-      _sessionManager,
-      _supabaseService,
-    );
+      final pollAnswerHandler = PollAnswerHandler(
+        _sessionManager,
+        _supabaseService,
+      );
 
-    final shareHandler = ShareHandler(
-      _supabaseService,
-      _sessionManager,
-    );
+      final shareHandler = ShareHandler(
+        _supabaseService,
+        _sessionManager,
+      );
 
-    _updateHandler = UpdateHandler(
-      messageHandler,
-      pollAnswerHandler,
-      shareHandler,
-    );
+      _updateHandler = UpdateHandler(
+        messageHandler,
+        pollAnswerHandler,
+        shareHandler,
+      );
 
-    _updateHandler.setupHandlers(_bot);
+      _updateHandler.setupHandlers(_bot);
 
-    print('✅ [QuizBot] Initialization complete');
+      print('✅ [QuizBot] Initialization complete');
+    } catch (e, stack) {
+      print('❌ [QuizBot] Initialization failed: $e');
+      print('Stack trace: $stack');
+      rethrow;
+    }
   }
 
   /// Initialize Supabase connection
@@ -84,62 +96,89 @@ class QuizBot {
 
     try {
       print('🔍 [QuizBot] Testing connection...');
-      final me = await _bot.getMe();
+
+      final me = await _bot.getMe().timeout(
+        Duration(seconds: 10),
+        onTimeout: () {
+          throw TimeoutException('Bot connection timeout');
+        },
+      );
+
       print('✅ [QuizBot] Connected as: @${me.username}');
       print('📋 [QuizBot] Bot name: ${me.firstName}');
       print('🆔 [QuizBot] Bot ID: ${me.id}');
 
       _isRunning = true;
 
-      // Message counter
-      var messageCount = 0;
+      // Message counter with logging
       _bot.onMessage((ctx) {
-        messageCount++;
+        _messageCount++;
         final username = ctx.from?.username ?? 'unknown';
-        final type = ctx.message?.document != null ? '[📄 document]'
+        final type = ctx.message?.document != null
+            ? '[📄 document]'
             : ctx.message?.text ?? '[media]';
-        print('📨 [$messageCount] $username: $type');
+
+        if (_messageCount % 10 == 0) {
+          print('📊 [QuizBot] Total messages processed: $_messageCount');
+        }
+
+        print('📨 [$_messageCount] $username: $type');
       });
 
       print('🚀 [QuizBot] Starting polling...');
 
-      // Start polling in background
+      // Start polling with error handling
       _bot.start().then((_) {
-        print('⚠️  [QuizBot] Polling ended');
+        print('⚠️  [QuizBot] Polling ended normally');
         _isRunning = false;
-      }).catchError((e) {
+      }).catchError((e, stack) {
         print('❌ [QuizBot] Polling error: $e');
+        print('Stack trace: $stack');
         _isRunning = false;
       });
 
       print('✅ [QuizBot] Bot is now running!');
-      print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      print('🎯 Bot Features:');
-      print('   🔀 Smart question shuffling');
-      print('   🎲 Answer shuffling with tracking');
-      print('   📤 Quiz sharing via links');
-      print('   💾 Hybrid storage (5 quizzes)');
-      print('   📊 Statistics & analytics');
-      print('   ⏱️  Custom time limits');
-      print('   🔄 Pause & resume');
-      print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      print('📡 Waiting for updates...\n');
+      _printBotInfo();
 
     } catch (e, stack) {
       print('❌ [QuizBot] Start failed: $e');
-      print(stack);
+      print('Stack trace: $stack');
       _isRunning = false;
       rethrow;
     }
   }
 
+  /// Print bot information
+  void _printBotInfo() {
+    print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    print('🎯 HEMIS Quiz Bot - Production Ready');
+    print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    print('✨ Features:');
+    print('   🔀 Smart question shuffling');
+    print('   🎲 Answer shuffling with tracking');
+    print('   📤 Quiz sharing via deep links');
+    print('   💾 Hybrid storage (5 quizzes)');
+    print('   📊 Statistics & analytics');
+    print('   ⏱️  Custom time limits');
+    print('   🔄 Pause & resume');
+    print('   🛡️  Comprehensive error handling');
+    print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    print('📡 Waiting for updates...\n');
+  }
+
   /// Stop the bot
   Future<void> stop() async {
     print('🛑 [QuizBot] Stopping...');
-    _isRunning = false;
-    _sessionManager.clearAll();
-    await _bot.stop();
-    print('✅ [QuizBot] Stopped successfully');
+
+    try {
+      _isRunning = false;
+      _sessionManager.clearAll();
+      await _bot.stop();
+      print('✅ [QuizBot] Stopped successfully');
+      print('📊 Total messages processed: $_messageCount');
+    } catch (e) {
+      print('❌ [QuizBot] Error during stop: $e');
+    }
   }
 
   /// Get bot statistics
@@ -150,6 +189,8 @@ class QuizBot {
       return {
         'bot_running': _isRunning,
         'active_sessions': _sessionManager.sessionCount,
+        'total_messages': _messageCount,
+        'uptime_seconds': DateTime.now().millisecondsSinceEpoch ~/ 1000,
         ...supabaseStats,
       };
     } catch (e) {
@@ -157,6 +198,7 @@ class QuizBot {
       return {
         'bot_running': _isRunning,
         'active_sessions': _sessionManager.sessionCount,
+        'total_messages': _messageCount,
         'error': e.toString(),
       };
     }
@@ -165,7 +207,7 @@ class QuizBot {
   /// Check bot health
   Future<bool> healthCheck() async {
     try {
-      await _bot.getMe();
+      await _bot.getMe().timeout(Duration(seconds: 5));
       return true;
     } catch (e) {
       print('❌ [QuizBot] Health check failed: $e');
@@ -185,10 +227,48 @@ class QuizBot {
         'can_join_groups': me.canJoinGroups,
         'can_read_all_group_messages': me.canReadAllGroupMessages,
         'supports_inline_queries': me.supportsInlineQueries,
+        'is_running': _isRunning,
+        'message_count': _messageCount,
       };
     } catch (e) {
-      return {'error': e.toString()};
+      return {
+        'error': e.toString(),
+        'is_running': _isRunning,
+        'message_count': _messageCount,
+      };
     }
+  }
+
+  /// Restart bot (useful for Railway deployments)
+  Future<void> restart() async {
+    print('🔄 [QuizBot] Restarting...');
+
+    try {
+      await stop();
+      await Future.delayed(Duration(seconds: 2));
+      await start();
+      print('✅ [QuizBot] Restart complete');
+    } catch (e) {
+      print('❌ [QuizBot] Restart failed: $e');
+      rethrow;
+    }
+  }
+
+  /// Get current status
+  String getStatus() {
+    return _isRunning ? 'Running ✅' : 'Stopped ❌';
+  }
+
+  /// Get session count
+  int getSessionCount() {
+    return _sessionManager.sessionCount;
   }
 }
 
+class TimeoutException implements Exception {
+  final String message;
+  TimeoutException(this.message);
+
+  @override
+  String toString() => message;
+}

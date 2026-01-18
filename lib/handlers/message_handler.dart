@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'dart:math';
-import 'package:televerse/telegram.dart' show InlineKeyboardButton, InputPollOption;
+import 'package:televerse/telegram.dart' show InlineKeyboardButton, InputPollOption, Message;
 import 'package:televerse/televerse.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
@@ -8,7 +8,7 @@ import '../services/quiz_service.dart';
 import '../services/quiz_session_manager.dart';
 import '../services/supabase_service.dart';
 
-/// Enhanced message handler with shuffle and share functionality
+/// Enhanced message handler with improved error handling and share functionality
 class MessageHandler {
   final QuizService quizService;
   final QuizSessionManager sessionManager;
@@ -28,42 +28,47 @@ class MessageHandler {
   }
 
   Future<void> handleStart(Context ctx) async {
-    final userId = ctx.message?.from?.id;
-    final username = ctx.message?.from?.username ?? 'unknown';
-    final firstName = ctx.message?.from?.firstName;
-    final lastName = ctx.message?.from?.lastName;
+    try {
+      final userId = ctx.message?.from?.id;
+      final username = ctx.message?.from?.username ?? 'unknown';
+      final firstName = ctx.message?.from?.firstName;
+      final lastName = ctx.message?.from?.lastName;
 
-    if (userId != null) {
-      sessionManager.endSession(userId);
+      if (userId != null) {
+        sessionManager.clearUserData(userId);
 
-      try {
-        await supabaseService.upsertUser(
-          telegramId: userId,
-          username: username,
-          firstName: firstName,
-          lastName: lastName,
-        );
-      } catch (e) {
-        print('⚠️ Supabase error: $e');
+        try {
+          await supabaseService.upsertUser(
+            telegramId: userId,
+            username: username,
+            firstName: firstName,
+            lastName: lastName,
+          );
+        } catch (e) {
+          print('⚠️ Supabase user upsert error: $e');
+        }
       }
-    }
 
-    await ctx.reply(
-      '👋 *HEMIS Quiz Botga xush kelibsiz!*\n\n'
-          '📚 HEMIS tizimidan eksport qilingan test fayllarini yuboring.\n\n'
-          '📄 *Qo\'llab-quvvatlanadigan formatlar:*\n'
-          '   • DOCX (tavsiya etiladi) ✅\n'
-          '   • DOC\n'
-          '   • TXT\n\n'
-          '❌ *MUHIM:* PDF format qo\'llab-quvvatlanmaydi!\n\n'
-          '💡 *Buyruqlar:*\n'
-          '   • /quizlarim - Mening quizlarim\n'
-          '   • /statistika - Mening statistikam\n'
-          '   • /share - Quizni ulashish\n'
-          '   • /help - Yordam\n'
-          '   • /stop - Testni to\'xtatish',
-      parseMode: ParseMode.markdown,
-    );
+      await ctx.reply(
+        '👋 *HEMIS Quiz Botga xush kelibsiz!*\n\n'
+            '📚 HEMIS tizimidan eksport qilingan test fayllarini yuboring.\n\n'
+            '📄 *Qo\'llab-quvvatlanadigan formatlar:*\n'
+            '   • DOCX (tavsiya etiladi) ✅\n'
+            '   • DOC\n'
+            '   • TXT\n\n'
+            '❌ *MUHIM:* PDF format qo\'llab-quvvatlanmaydi!\n\n'
+            '💡 *Buyruqlar:*\n'
+            '   /quizlarim - Mening quizlarim\n'
+            '   /statistika - Mening statistikam\n'
+            '   /share - Quizni ulashish\n'
+            '   /help - Yordam\n'
+            '   /stop - Testni to\'xtatish',
+        parseMode: ParseMode.markdown,
+      );
+    } catch (e) {
+      print('❌ handleStart error: $e');
+      await _sendErrorMessage(ctx, 'Xatolik yuz berdi. Qaytadan urinib ko\'ring.');
+    }
   }
 
   Future<void> handleDocument(Context ctx) async {
@@ -74,71 +79,87 @@ class MessageHandler {
     if (userId == null) return;
 
     final fileName = document.fileName ?? 'noma\'lum';
+    Message? loadingMsg;
 
     try {
       await supabaseService.updateUserActivity(userId);
-    } catch (e) {
-      print('⚠️ Error updating activity: $e');
-    }
 
-    if (!quizService.isSupportedFile(fileName)) {
-      final extension = path.extension(fileName).toLowerCase();
-      String errorMsg = '❌ *Fayl turi qo\'llab-quvvatlanmaydi!*\n\n';
+      if (!quizService.isSupportedFile(fileName)) {
+        final extension = path.extension(fileName).toLowerCase();
+        String errorMsg = '❌ *Fayl turi qo\'llab-quvvatlanmaydi!*\n\n';
 
-      if (extension == '.pdf') {
-        errorMsg += '🚫 *PDF format ishlamaydi!*\n\n'
-            '💡 *Yechim:* HEMIS\'dan DOCX formatda eksport qiling.';
-      } else {
-        errorMsg += '📄 Faqat DOCX, DOC, TXT formatlar qo\'llab-quvvatlanadi.';
+        if (extension == '.pdf') {
+          errorMsg += '🚫 *PDF format ishlamaydi!*\n\n'
+              '💡 *Yechim:* HEMIS\'dan DOCX formatda eksport qiling.';
+        } else {
+          errorMsg += '📄 Faqat DOCX, DOC, TXT formatlar qo\'llab-quvvatlanadi.';
+        }
+
+        await ctx.reply(errorMsg, parseMode: ParseMode.markdown);
+        return;
       }
 
-      await ctx.reply(errorMsg, parseMode: ParseMode.markdown);
-      return;
-    }
+      if (document.fileSize != null && document.fileSize! > 10 * 1024 * 1024) {
+        await ctx.reply(
+          '❌ *Fayl juda katta!* (Max: 10 MB)',
+          parseMode: ParseMode.markdown,
+        );
+        return;
+      }
 
-    if (document.fileSize != null && document.fileSize! > 10 * 1024 * 1024) {
-      await ctx.reply(
-        '❌ *Fayl juda katta!* (Max: 10 MB)',
-        parseMode: ParseMode.markdown,
-      );
-      return;
-    }
+      loadingMsg = await ctx.reply('⏳ Fayl qayta ishlanmoqda...');
 
-    final loadingMsg = await ctx.reply('⏳ Fayl qayta ishlanmoqda...');
-
-    try {
       final file = await _downloadFile(ctx.api, document.fileId, fileName);
-      final quiz = await quizService.processFile(file);
-      await file.delete();
 
-      if (quiz.questions.isEmpty) {
-        throw Exception('Faylda to\'g\'ri formatdagi savollar topilmadi!');
+      try {
+        final quiz = await quizService.processFile(file);
+
+        if (quiz.questions.isEmpty) {
+          throw Exception('Faylda savollar topilmadi!');
+        }
+
+        sessionManager.createSession(userId, quiz);
+        sessionManager.setFileName(userId, fileName);
+
+        await ctx.api.editMessageText(
+          ChatID(userId),
+          loadingMsg.messageId,
+          '✅ *Fayl muvaffaqiyatli qayta ishlandi!*\n\n'
+              '📊 Topilgan savollar: *${quiz.questions.length} ta*\n\n'
+              '📚 Iltimos, *fan nomini* kiriting:',
+          parseMode: ParseMode.markdown,
+        );
+      } finally {
+        try {
+          await file.delete();
+        } catch (e) {
+          print('⚠️ Failed to delete temp file: $e');
+        }
       }
-
-      sessionManager.createSession(userId, quiz);
-      sessionManager.setFileName(userId, fileName);
-
-      await ctx.api.editMessageText(
-        ChatID(userId),
-        loadingMsg.messageId,
-        '✅ *Fayl muvaffaqiyatli qayta ishlandi!*\n\n'
-            '📊 Topilgan savollar: *${quiz.questions.length} ta*\n\n'
-            '📚 Iltimos, *fan nomini* kiriting:',
-        parseMode: ParseMode.markdown,
-      );
     } catch (e) {
-      print('❌ Xatolik: $e');
-      await ctx.api.editMessageText(
-        ChatID(userId),
-        loadingMsg.messageId,
-        '❌ *Xatolik yuz berdi!*\n\n'
-            'Xatolik: ${e.toString()}\n\n'
-            '💡 Fayl formatini tekshiring:\n'
-            '   • Savollar: +++++\n'
-            '   • Variantlar: =====\n'
-            '   • To\'g\'ri javob: #',
-        parseMode: ParseMode.markdown,
-      );
+      print('❌ handleDocument error: $e');
+
+      if (loadingMsg != null) {
+        try {
+          await ctx.api.editMessageText(
+            ChatID(userId),
+            loadingMsg.messageId,
+            '❌ *Xatolik yuz berdi!*\n\n'
+                '${e.toString()}\n\n'
+                '💡 *Format tekshiring:*\n'
+                '   • Savollar: +++++\n'
+                '   • Variantlar: =====\n'
+                '   • To\'g\'ri javob: #\n\n'
+                'Qaytadan urinib ko\'ring: /start',
+            parseMode: ParseMode.markdown,
+          );
+        } catch (editError) {
+          print('❌ Failed to edit message: $editError');
+          await _sendErrorMessage(ctx, 'Fayl qayta ishlashda xatolik: ${e.toString()}');
+        }
+      } else {
+        await _sendErrorMessage(ctx, 'Fayl qayta ishlashda xatolik: ${e.toString()}');
+      }
     }
   }
 
@@ -149,45 +170,59 @@ class MessageHandler {
     final text = ctx.message?.text;
     if (text == null || text.isEmpty || text.startsWith('/')) return;
 
-    final session = sessionManager.getSession(userId);
+    try {
+      final session = sessionManager.getSession(userId);
 
-    if (session != null && session.quiz.subjectName == null) {
-      final updatedQuiz = session.quiz.copyWith(subjectName: text);
-      sessionManager.createSession(userId, updatedQuiz);
+      if (session != null && session.quiz.subjectName == null) {
+        final cleanedText = text.trim();
+        if (cleanedText.isEmpty || cleanedText.length > 100) {
+          await ctx.reply(
+            '⚠️ Fan nomi 1-100 belgi orasida bo\'lishi kerak.',
+            parseMode: ParseMode.markdown,
+          );
+          return;
+        }
 
-      await ctx.reply(
-        '📚 *Fan:* $text\n\n'
-            '🔀 *Aralashtirishni sozlang:*',
-        parseMode: ParseMode.markdown,
-        replyMarkup: InlineKeyboard(
-          inlineKeyboard: [
-            [
-              InlineKeyboardButton(
-                text: '🔀 Savollarni aralashtirish',
-                callbackData: 'shuffle:questions',
-              ),
+        final updatedQuiz = session.quiz.copyWith(subjectName: cleanedText);
+        sessionManager.createSession(userId, updatedQuiz);
+
+        await ctx.reply(
+          '📚 *Fan:* $cleanedText\n\n'
+              '🔀 *Aralashtirishni sozlang:*',
+          parseMode: ParseMode.markdown,
+          replyMarkup: InlineKeyboard(
+            inlineKeyboard: [
+              [
+                InlineKeyboardButton(
+                  text: '🔀 Savollarni aralashtirish',
+                  callbackData: 'shuffle:questions',
+                ),
+              ],
+              [
+                InlineKeyboardButton(
+                  text: '🎲 Javoblarni aralashtirish',
+                  callbackData: 'shuffle:answers',
+                ),
+              ],
+              [
+                InlineKeyboardButton(
+                  text: '🔀🎲 Hammasini aralashtirish',
+                  callbackData: 'shuffle:both',
+                ),
+              ],
+              [
+                InlineKeyboardButton(
+                  text: '📋 Aralashtirishsiz',
+                  callbackData: 'shuffle:none',
+                ),
+              ],
             ],
-            [
-              InlineKeyboardButton(
-                text: '🎲 Javoblarni aralashtirish',
-                callbackData: 'shuffle:answers',
-              ),
-            ],
-            [
-              InlineKeyboardButton(
-                text: '🔀🎲 Hammasini aralashtirish',
-                callbackData: 'shuffle:both',
-              ),
-            ],
-            [
-              InlineKeyboardButton(
-                text: '📋 Aralashtirishsiz',
-                callbackData: 'shuffle:none',
-              ),
-            ],
-          ],
-        ),
-      );
+          ),
+        );
+      }
+    } catch (e) {
+      print('❌ handleText error: $e');
+      await _sendErrorMessage(ctx, 'Xatolik yuz berdi. Qaytadan urinib ko\'ring.');
     }
   }
 
@@ -198,111 +233,119 @@ class MessageHandler {
     final userId = query.from.id;
     final data = query.data;
 
-    // Shuffle options
-    if (data?.startsWith('shuffle:') == true) {
-      final shuffleType = data!.substring(8);
-
-      await ctx.answerCallbackQuery(
-        text: _getShuffleMessage(shuffleType),
-      );
-
-      await ctx.editMessageText(
-        '${_getShuffleEmoji(shuffleType)} ${_getShuffleDescription(shuffleType)}',
-        parseMode: ParseMode.markdown,
-      );
-
-      // Store shuffle choice
-      sessionManager.setShuffleChoice(userId, shuffleType);
-
-      await Future.delayed(Duration(milliseconds: 300));
-      await _showTimeSelection(ctx, userId);
-      return;
-    }
-
-    // Time selection
-    if (data?.startsWith('time:') == true) {
-      final timeStr = data!.substring(5);
-      final time = int.tryParse(timeStr);
-      if (time == null) return;
-
-      await ctx.answerCallbackQuery(
-        text: time == 0 ? '♾ Cheksiz vaqt' : '⏱ $time soniya',
-      );
-
-      await ctx.editMessageText(
-        '⏱ Tanlangan vaqt: *${time == 0 ? "Cheksiz" : "$time soniya"}*\n\n'
-            '🚀 Test tayyorlanmoqda...',
-        parseMode: ParseMode.markdown,
-      );
-
-      await Future.delayed(Duration(milliseconds: 500));
-      await _startQuiz(ctx, userId, time);
-      return;
-    }
-
-    // Quiz control
-    if (data == 'quiz_continue') {
-      sessionManager.resetMissedCount(userId);
-      await ctx.answerCallbackQuery(text: 'Test davom ettirilmoqda...');
-      await ctx.editMessageText(
-        '▶️ *Test davom ettirilmoqda...*\n\n💪 Omad tilaymiz!',
-        parseMode: ParseMode.markdown,
-      );
-      await Future.delayed(Duration(milliseconds: 500));
-      await _sendQuestion(ctx, userId);
-      return;
-    }
-
-    if (data == 'quiz_finish') {
-      await ctx.answerCallbackQuery(text: 'Test yakunlanmoqda...');
-      sessionManager.endSession(userId);
-      await ctx.editMessageText(
-        '🏁 *Test yakunlandi!*\n\n'
-            '📊 Natijangizni ko\'rish uchun: /statistika',
-        parseMode: ParseMode.markdown,
-      );
-      return;
-    }
-
-    // Share quiz
-    if (data?.startsWith('share_quiz:') == true) {
-      final quizId = int.tryParse(data!.substring(11));
-      if (quizId == null) return;
-
-      try {
-        final shareCode = await supabaseService.generateShareCode(quizId);
+    try {
+      // Shuffle options
+      if (data?.startsWith('shuffle:') == true) {
+        final shuffleType = data!.substring(8);
 
         await ctx.answerCallbackQuery(
-          text: '📤 Ulashish havolasi yaratildi!',
+          text: _getShuffleMessage(shuffleType),
         );
 
-        final botUsername = (await ctx.api.getMe()).username;
-        final shareUrl = 'https://t.me/$botUsername?start=quiz_$shareCode';
-
-        await ctx.reply(
-          '📤 *Quiz ulashish*\n\n'
-              '🔗 Havola: `$shareUrl`\n\n'
-              '📋 Kodni ulashing: `$shareCode`\n\n'
-              '💡 Do\'stlaringiz ushbu havola orqali aynan shu quizni yechishlari mumkin!',
+        await ctx.editMessageText(
+          '${_getShuffleEmoji(shuffleType)} ${_getShuffleDescription(shuffleType)}',
           parseMode: ParseMode.markdown,
-          replyMarkup: InlineKeyboard(
-            inlineKeyboard: [
-              [
-                InlineKeyboardButton(
-                  text: '📤 Ulashish',
-                  url: 'https://t.me/share/url?url=$shareUrl&text=Bu quizni yeching!',
-                ),
-              ],
-            ],
-          ),
         );
-      } catch (e) {
-        print('❌ Share error: $e');
-        await ctx.answerCallbackQuery(
-          text: '❌ Xatolik yuz berdi',
-        );
+
+        sessionManager.setShuffleChoice(userId, shuffleType);
+
+        await Future.delayed(Duration(milliseconds: 300));
+        await _showTimeSelection(ctx, userId);
+        return;
       }
-      return;
+
+      // Time selection
+      if (data?.startsWith('time:') == true) {
+        final timeStr = data!.substring(5);
+        final time = int.tryParse(timeStr);
+        if (time == null) return;
+
+        await ctx.answerCallbackQuery(
+          text: time == 0 ? '♾ Cheksiz vaqt' : '⏱ $time soniya',
+        );
+
+        await ctx.editMessageText(
+          '⏱ Tanlangan vaqt: *${time == 0 ? "Cheksiz" : "$time soniya"}*\n\n'
+              '🚀 Test tayyorlanmoqda...',
+          parseMode: ParseMode.markdown,
+        );
+
+        await Future.delayed(Duration(milliseconds: 500));
+        await _startQuiz(ctx, userId, time);
+        return;
+      }
+
+      // Quiz control
+      if (data == 'quiz_continue') {
+        sessionManager.resetMissedCount(userId);
+        await ctx.answerCallbackQuery(text: 'Test davom ettirilmoqda...');
+        await ctx.editMessageText(
+          '▶️ *Test davom ettirilmoqda...*\n\n💪 Omad tilaymiz!',
+          parseMode: ParseMode.markdown,
+        );
+        await Future.delayed(Duration(milliseconds: 500));
+        await _sendQuestion(ctx, userId);
+        return;
+      }
+
+      if (data == 'quiz_finish') {
+        await ctx.answerCallbackQuery(text: 'Test yakunlanmoqda...');
+        sessionManager.endSession(userId);
+        await ctx.editMessageText(
+          '🏁 *Test yakunlandi!*\n\n'
+              '📊 Natijangizni ko\'rish uchun: /statistika',
+          parseMode: ParseMode.markdown,
+        );
+        return;
+      }
+
+      // Share quiz
+      if (data?.startsWith('share_quiz:') == true) {
+        final quizId = int.tryParse(data!.substring(11));
+        if (quizId == null) return;
+
+        try {
+          final shareCode = await supabaseService.generateShareCode(quizId);
+
+          await ctx.answerCallbackQuery(
+            text: '📤 Ulashish havolasi yaratildi!',
+          );
+
+          final botUsername = (await ctx.api.getMe()).username;
+          final shareUrl = 'https://t.me/$botUsername?start=quiz_$shareCode';
+
+          await ctx.reply(
+            '📤 *Quiz ulashish*\n\n'
+                '🔗 Havola: `$shareUrl`\n\n'
+                '📋 Kod: `$shareCode`\n\n'
+                '💡 Do\'stlaringiz ushbu havola orqali aynan shu quizni yechishlari mumkin!',
+            parseMode: ParseMode.markdown,
+            replyMarkup: InlineKeyboard(
+              inlineKeyboard: [
+                [
+                  InlineKeyboardButton(
+                    text: '📤 Telegram orqali ulashish',
+                    url: 'https://t.me/share/url?url=$shareUrl&text=Bu quizni yeching!',
+                  ),
+                ],
+              ],
+            ),
+          );
+        } catch (e) {
+          print('❌ Share error: $e');
+          await ctx.answerCallbackQuery(
+            text: '❌ Xatolik yuz berdi',
+          );
+        }
+        return;
+      }
+    } catch (e) {
+      print('❌ handleCallback error: $e');
+      try {
+        await ctx.answerCallbackQuery(text: '❌ Xatolik yuz berdi');
+      } catch (e) {
+        print('❌ Failed to answer callback: $e');
+      }
     }
   }
 
@@ -346,119 +389,126 @@ class MessageHandler {
   }
 
   Future<void> _showTimeSelection(Context ctx, int userId) async {
-    await ctx.reply(
-      '⏱ *Har bir savol uchun vaqtni tanlang:*',
-      parseMode: ParseMode.markdown,
-      replyMarkup: InlineKeyboard(
-        inlineKeyboard: [
-          [
-            InlineKeyboardButton(text: '⚡️ 10 soniya', callbackData: 'time:10'),
-            InlineKeyboardButton(text: '⏱ 20 soniya', callbackData: 'time:20'),
+    try {
+      await ctx.reply(
+        '⏱ *Har bir savol uchun vaqtni tanlang:*',
+        parseMode: ParseMode.markdown,
+        replyMarkup: InlineKeyboard(
+          inlineKeyboard: [
+            [
+              InlineKeyboardButton(text: '⚡️ 10s', callbackData: 'time:10'),
+              InlineKeyboardButton(text: '⏱ 20s', callbackData: 'time:20'),
+              InlineKeyboardButton(text: '🕐 30s', callbackData: 'time:30'),
+            ],
+            [
+              InlineKeyboardButton(text: '⏰ 60s', callbackData: 'time:60'),
+              InlineKeyboardButton(text: '🕰 90s', callbackData: 'time:90'),
+              InlineKeyboardButton(text: '⏳ 120s', callbackData: 'time:120'),
+            ],
+            [
+              InlineKeyboardButton(text: '♾ Cheksiz', callbackData: 'time:0'),
+            ],
           ],
-          [
-            InlineKeyboardButton(text: '🕐 30 soniya', callbackData: 'time:30'),
-            InlineKeyboardButton(text: '⏰ 60 soniya', callbackData: 'time:60'),
-          ],
-          [
-            InlineKeyboardButton(text: '🕰 90 soniya', callbackData: 'time:90'),
-            InlineKeyboardButton(text: '⏳ 120 soniya', callbackData: 'time:120'),
-          ],
-          [
-            InlineKeyboardButton(text: '♾ Cheksiz', callbackData: 'time:0'),
-          ],
-        ],
-      ),
-    );
+        ),
+      );
+    } catch (e) {
+      print('❌ _showTimeSelection error: $e');
+      await _sendErrorMessage(ctx, 'Xatolik yuz berdi. /start ni bosing.');
+    }
   }
 
   Future<void> _startQuiz(Context ctx, int userId, int timePerQuestion) async {
-    final session = sessionManager.getSession(userId);
-    if (session == null) return;
-
-    var quiz = session.quiz.copyWith(timePerQuestion: timePerQuestion);
-
-    // Apply shuffle based on user choice
-    final shuffleChoice = sessionManager.getShuffleChoice(userId);
-
-    switch (shuffleChoice) {
-      case 'questions':
-        quiz = quiz.shuffleQuestions();
-        break;
-      case 'answers':
-        quiz = quiz.shuffleAnswers();
-        break;
-      case 'both':
-        quiz = quiz.shuffleBoth();
-        break;
-      default:
-      // No shuffle
-        break;
-    }
-
-    sessionManager.createSession(userId, quiz);
-
-    // Generate share code
-    final shareCode = _generateShareCode();
-    quiz = quiz.copyWith(shareCode: shareCode);
-    sessionManager.createSession(userId, quiz);
-
-    // Save to Supabase
     try {
-      final fileName = sessionManager.getFileName(userId);
+      final session = sessionManager.getSession(userId);
+      if (session == null) {
+        await _sendErrorMessage(ctx, 'Sessiya topilmadi. /start ni bosing.');
+        return;
+      }
 
-      final questions = quiz.questions.map((q) {
-        return {
-          'text': q.text,
-          'options': q.options,
-          'correctIndex': q.correctOptionIndex,
-        };
-      }).toList();
+      var quiz = session.quiz.copyWith(timePerQuestion: timePerQuestion);
 
-      final quizData = await supabaseService.saveQuiz(
-        telegramId: userId,
-        subjectName: quiz.subjectName!,
-        totalQuestions: quiz.questions.length,
-        isShuffled: quiz.shuffled,
-        answersShuffled: quiz.answersShuffled,
-        timePerQuestion: timePerQuestion,
-        fileName: fileName ?? 'unknown',
-        questions: questions,
-        shareCode: shareCode,
+      final shuffleChoice = sessionManager.getShuffleChoice(userId);
+
+      switch (shuffleChoice) {
+        case 'questions':
+          quiz = quiz.shuffleQuestions();
+          break;
+        case 'answers':
+          quiz = quiz.shuffleAnswers();
+          break;
+        case 'both':
+          quiz = quiz.shuffleBoth();
+          break;
+        default:
+          break;
+      }
+
+      sessionManager.createSession(userId, quiz);
+
+      final shareCode = _generateShareCode();
+      quiz = quiz.copyWith(shareCode: shareCode);
+      sessionManager.createSession(userId, quiz);
+
+      try {
+        final fileName = sessionManager.getFileName(userId);
+
+        final questions = quiz.questions.map((q) {
+          return {
+            'text': q.text,
+            'options': q.options,
+            'correctIndex': q.correctOptionIndex,
+          };
+        }).toList();
+
+        final quizData = await supabaseService.saveQuiz(
+          telegramId: userId,
+          subjectName: quiz.subjectName!,
+          totalQuestions: quiz.questions.length,
+          isShuffled: quiz.shuffled,
+          answersShuffled: quiz.answersShuffled,
+          timePerQuestion: timePerQuestion,
+          fileName: fileName ?? 'unknown',
+          questions: questions,
+          shareCode: shareCode,
+        );
+
+        sessionManager.setQuizId(userId, quizData['id']);
+        print('✅ Quiz saved with share code: $shareCode');
+      } catch (e) {
+        print('⚠️ Error saving quiz to Supabase: $e');
+      }
+
+      await ctx.reply(
+        '🎯 *Test boshlandi!*\n\n'
+            '📚 Fan: *${quiz.subjectName}*\n'
+            '📊 Savollar: *${quiz.questions.length} ta*\n'
+            '🔀 Aralashtirish: *${_getShuffleDescription(shuffleChoice ?? 'none')}*\n'
+            '⏱ Vaqt: *${timePerQuestion > 0 ? "$timePerQuestion soniya" : "Cheksiz"}*\n\n'
+            '💡 Quizni ulashish: /share',
+        parseMode: ParseMode.markdown,
       );
 
-      sessionManager.setQuizId(userId, quizData['id']);
-      print('✅ Quiz saved with share code: $shareCode');
+      await Future.delayed(Duration(milliseconds: 500));
+      await _sendQuestion(ctx, userId);
     } catch (e) {
-      print('⚠️ Error saving quiz: $e');
+      print('❌ _startQuiz error: $e');
+      await _sendErrorMessage(ctx, 'Test boshlashda xatolik: ${e.toString()}');
     }
-
-    await ctx.reply(
-      '🎯 *Test boshlandi!*\n\n'
-          '📚 Fan: *${quiz.subjectName}*\n'
-          '📊 Savollar: *${quiz.questions.length} ta*\n'
-          '🔀 Aralashtirish: *${_getShuffleDescription(shuffleChoice ?? 'none')}*\n'
-          '⏱ Vaqt: *${timePerQuestion > 0 ? "$timePerQuestion soniya" : "Cheksiz"}*\n\n'
-          '💡 Quizni ulashish: /share',
-      parseMode: ParseMode.markdown,
-    );
-
-    await Future.delayed(Duration(milliseconds: 500));
-    await _sendQuestion(ctx, userId);
   }
 
   Future<void> _sendQuestion(Context ctx, int userId) async {
-    final session = sessionManager.getSession(userId);
-    if (session == null || session.isCompleted) return;
-
-    final question = session.currentQuestion;
-    final quiz = session.quiz;
-
-    final List<InputPollOption> pollOptions = [];
-    for (final opt in question.options) {
-      pollOptions.add(InputPollOption(text: _truncate(opt, 100)));
-    }
-
     try {
+      final session = sessionManager.getSession(userId);
+      if (session == null || session.isCompleted) return;
+
+      final question = session.currentQuestion;
+      final quiz = session.quiz;
+
+      final List<InputPollOption> pollOptions = [];
+      for (final opt in question.options) {
+        pollOptions.add(InputPollOption(text: _truncate(opt, 100)));
+      }
+
       await ctx.api.sendPoll(
         ChatID(userId),
         '${session.progress} | ${_truncate(question.text, 300)}',
@@ -469,10 +519,11 @@ class MessageHandler {
         openPeriod: quiz.timePerQuestion > 0 ? quiz.timePerQuestion : null,
       );
     } catch (e) {
-      print('❌ Error sending poll: $e');
+      print('❌ _sendQuestion error: $e');
       await ctx.api.sendMessage(
         ChatID(userId),
-        '❌ Savol yuborishda xatolik!\n\nXatolik: $e',
+        '❌ Savol yuborishda xatolik!\n\n'
+            'Test to\'xtatildi. Qaytadan boshlang: /start',
       );
     }
   }
@@ -498,7 +549,7 @@ class MessageHandler {
       for (int i = 0; i < quizzes.length && i < 10; i++) {
         final quiz = quizzes[i];
         final quizId = quiz['id'];
-        final subjectName = quiz['subject_name'] ?? 'Noma\'lum fan';
+        final subjectName = quiz['subject_name'] ?? 'Noma\'lum';
         final totalQuestions = quiz['total_questions'] ?? 0;
         final hasStored = quiz['has_stored_questions'] == true;
 
@@ -506,11 +557,11 @@ class MessageHandler {
 
         buttons.add([
           InlineKeyboardButton(
-            text: '$emoji $subjectName ($totalQuestions ta)',
+            text: '$emoji $subjectName ($totalQuestions)',
             callbackData: 'start_quiz:$quizId',
           ),
           InlineKeyboardButton(
-            text: '📤',
+            text: '📤 Ulashish',
             callbackData: 'share_quiz:$quizId',
           ),
         ]);
@@ -519,15 +570,14 @@ class MessageHandler {
       await ctx.reply(
         '📚 *Sizning quizlaringiz:*\n\n'
             '✅ = Instant qayta boshlash\n'
-            '📄 = Faqat tarix\n'
-            '📤 = Ulashish\n\n'
-            'Tanlang:',
+            '📄 = Faqat tarix\n\n'
+            'Quiz tanlang yoki ulashing:',
         parseMode: ParseMode.markdown,
         replyMarkup: InlineKeyboard(inlineKeyboard: buttons),
       );
     } catch (e) {
-      print('❌ Error: $e');
-      await ctx.reply('❌ Xatolik yuz berdi!');
+      print('❌ handleMyQuizzes error: $e');
+      await _sendErrorMessage(ctx, 'Quizlar yuklanmadi. Qaytadan urinib ko\'ring.');
     }
   }
 
@@ -556,8 +606,8 @@ class MessageHandler {
 
       await ctx.reply(buffer.toString(), parseMode: ParseMode.markdown);
     } catch (e) {
-      print('❌ Error: $e');
-      await ctx.reply('❌ Xatolik yuz berdi!');
+      print('❌ handleStatistics error: $e');
+      await _sendErrorMessage(ctx, 'Statistika yuklanmadi.');
     }
   }
 
@@ -565,62 +615,71 @@ class MessageHandler {
     final userId = ctx.message?.from?.id;
     if (userId == null) return;
 
-    final session = sessionManager.getSession(userId);
+    try {
+      final session = sessionManager.getSession(userId);
 
-    if (session == null) {
+      if (session == null) {
+        await ctx.reply(
+          '❌ *Faol test yo\'q!*\n\n'
+              'Test boshlash: /start',
+          parseMode: ParseMode.markdown,
+        );
+        return;
+      }
+
       await ctx.reply(
-        '❌ *Faol test yo\'q!*\n\n'
-            'Test boshlash: /start',
+        '⏸ *Test to\'xtatildi!*\n\n'
+            'Nima qilmoqchisiz?',
         parseMode: ParseMode.markdown,
+        replyMarkup: InlineKeyboard(
+          inlineKeyboard: [
+            [
+              InlineKeyboardButton(
+                text: '▶️ Davom ettirish',
+                callbackData: 'quiz_continue',
+              ),
+            ],
+            [
+              InlineKeyboardButton(
+                text: '🏁 Tugatish',
+                callbackData: 'quiz_finish',
+              ),
+            ],
+          ],
+        ),
       );
-      return;
+    } catch (e) {
+      print('❌ handleStop error: $e');
+      await _sendErrorMessage(ctx, 'Xatolik yuz berdi.');
     }
-
-    await ctx.reply(
-      '⏸ *Test to\'xtatildi!*\n\n'
-          'Nima qilmoqchisiz?',
-      parseMode: ParseMode.markdown,
-      replyMarkup: InlineKeyboard(
-        inlineKeyboard: [
-          [
-            InlineKeyboardButton(
-              text: '▶️ Davom ettirish',
-              callbackData: 'quiz_continue',
-            ),
-          ],
-          [
-            InlineKeyboardButton(
-              text: '🏁 Tugatish',
-              callbackData: 'quiz_finish',
-            ),
-          ],
-        ],
-      ),
-    );
   }
 
   Future<void> handleHelp(Context ctx) async {
-    await ctx.reply(
-      '📚 *HEMIS Quiz Bot*\n\n'
-          '🎯 *Qanday ishlaydi:*\n'
-          '1️⃣ DOCX/DOC/TXT fayl yuklang\n'
-          '2️⃣ Fan nomini kiriting\n'
-          '3️⃣ Aralashtirish sozlamalarini tanlang\n'
-          '4️⃣ Vaqtni belgilang\n'
-          '5️⃣ Testni boshlang!\n\n'
-          '🔀 *Aralashtirish:*\n'
-          '   • Savollarni aralashtirish\n'
-          '   • Javoblarni aralashtirish\n'
-          '   • Ikkalasini ham\n\n'
-          '⚙️ *Buyruqlar:*\n'
-          '   /start - Boshlash\n'
-          '   /quizlarim - Quizlarim\n'
-          '   /statistika - Statistika\n'
-          '   /share - Ulashish\n'
-          '   /stop - To\'xtatish\n'
-          '   /help - Yordam',
-      parseMode: ParseMode.markdown,
-    );
+    try {
+      await ctx.reply(
+        '📚 *HEMIS Quiz Bot*\n\n'
+            '🎯 *Qanday ishlaydi:*\n'
+            '1️⃣ DOCX/DOC/TXT fayl yuklang\n'
+            '2️⃣ Fan nomini kiriting\n'
+            '3️⃣ Aralashtirish sozlamalarini tanlang\n'
+            '4️⃣ Vaqtni belgilang\n'
+            '5️⃣ Testni boshlang!\n\n'
+            '🔀 *Aralashtirish:*\n'
+            '   • Savollarni aralashtirish\n'
+            '   • Javoblarni aralashtirish\n'
+            '   • Ikkalasini ham\n\n'
+            '⚙️ *Buyruqlar:*\n'
+            '   /start - Boshlash\n'
+            '   /quizlarim - Quizlarim\n'
+            '   /statistika - Statistika\n'
+            '   /share - Ulashish\n'
+            '   /stop - To\'xtatish\n'
+            '   /help - Yordam',
+        parseMode: ParseMode.markdown,
+      );
+    } catch (e) {
+      print('❌ handleHelp error: $e');
+    }
   }
 
   String _truncate(String text, int maxLength) {
@@ -629,19 +688,46 @@ class MessageHandler {
   }
 
   Future<File> _downloadFile(RawAPI api, String fileId, String fileName) async {
-    final file = await api.getFile(fileId);
-    final filePath = file.filePath!;
-    final url = 'https://api.telegram.org/file/bot${api.token}/$filePath';
+    try {
+      final file = await api.getFile(fileId);
+      final filePath = file.filePath;
 
-    final response = await http.get(Uri.parse(url));
-    if (response.statusCode != 200) {
-      throw Exception('Faylni yuklab bo\'lmadi');
+      if (filePath == null) {
+        throw Exception('Fayl yo\'li topilmadi');
+      }
+
+      final url = 'https://api.telegram.org/file/bot${api.token}/$filePath';
+
+      final response = await http.get(Uri.parse(url)).timeout(
+        Duration(seconds: 30),
+        onTimeout: () {
+          throw Exception('Fayl yuklab olish juda uzoq davom etdi');
+        },
+      );
+
+      if (response.statusCode != 200) {
+        throw Exception('Faylni yuklab bo\'lmadi (${response.statusCode})');
+      }
+
+      final tempDir = Directory.systemTemp;
+      final tempFile = File(path.join(tempDir.path, fileName));
+      await tempFile.writeAsBytes(response.bodyBytes);
+
+      return tempFile;
+    } catch (e) {
+      print('❌ _downloadFile error: $e');
+      throw Exception('Faylni yuklab olishda xatolik: ${e.toString()}');
     }
+  }
 
-    final tempDir = Directory.systemTemp;
-    final tempFile = File(path.join(tempDir.path, fileName));
-    await tempFile.writeAsBytes(response.bodyBytes);
-
-    return tempFile;
+  Future<void> _sendErrorMessage(Context ctx, String message) async {
+    try {
+      await ctx.reply(
+        '❌ *Xatolik!*\n\n$message',
+        parseMode: ParseMode.markdown,
+      );
+    } catch (e) {
+      print('❌ Failed to send error message: $e');
+    }
   }
 }
