@@ -74,7 +74,12 @@ class ShareHandler {
     try {
       await ctx.answerCallbackQuery(text: 'Havola yaratilmoqda...');
 
+      // FIXED: Get share code with null safety
       final shareCode = await supabaseService.generateShareCode(quizId);
+
+      if (shareCode == null || shareCode.isEmpty) {
+        throw Exception('Share code yaratilmadi');
+      }
 
       await ctx.editMessageText(
         '⏳ Ulashish havolasi tayyorlanmoqda...',
@@ -90,6 +95,7 @@ class ShareHandler {
       try {
         await ctx.editMessageText(
           '❌ *Ulashish havolasi yaratilmadi!*\n\n'
+              'Xatolik: ${e.toString()}\n\n'
               'Qaytadan urinib ko\'ring: /share',
           parseMode: ParseMode.markdown,
         );
@@ -102,7 +108,17 @@ class ShareHandler {
   /// Show share information
   Future<void> _showShareInfo(Context ctx, String shareCode) async {
     try {
+      // FIXED: Validate shareCode before using
+      if (shareCode.isEmpty) {
+        throw Exception('Share code bo\'sh');
+      }
+
       final botUsername = (await ctx.api.getMe()).username;
+
+      if (botUsername == null || botUsername.isEmpty) {
+        throw Exception('Bot username topilmadi');
+      }
+
       final shareUrl = 'https://t.me/$botUsername?start=quiz_$shareCode';
 
       await ctx.reply(
@@ -135,7 +151,8 @@ class ShareHandler {
     } catch (e) {
       print('❌ _showShareInfo error: $e');
       await ctx.reply(
-        '❌ Havola yaratildi lekin ko\'rsatishda xatolik!\n\n'
+        '❌ *Havola ko\'rsatishda xatolik!*\n\n'
+            'Xatolik: ${e.toString()}\n\n'
             'Kod: `$shareCode`',
         parseMode: ParseMode.markdown,
       );
@@ -148,6 +165,17 @@ class ShareHandler {
     if (userId == null) return;
 
     try {
+      // FIXED: Validate shareCode
+      if (shareCode.isEmpty) {
+        await ctx.reply(
+          '❌ *Noto\'g\'ri kod!*\n\n'
+              'Havola noto\'g\'ri formatda.\n\n'
+              'Yangi test: /start',
+          parseMode: ParseMode.markdown,
+        );
+        return;
+      }
+
       // Clear any existing session
       sessionManager.clearUserData(userId);
 
@@ -164,6 +192,7 @@ class ShareHandler {
       if (quizData == null) {
         await ctx.reply(
           '❌ *Quiz topilmadi!*\n\n'
+              'Kod: `$shareCode`\n\n'
               'Kod noto\'g\'ri yoki quiz o\'chirilgan.\n\n'
               'Yangi test: /start',
           parseMode: ParseMode.markdown,
@@ -226,6 +255,16 @@ class ShareHandler {
     if (userId == null) return;
 
     try {
+      // FIXED: Validate shareCode
+      if (shareCode.isEmpty) {
+        await ctx.answerCallbackQuery(text: '❌ Noto\'g\'ri kod');
+        await ctx.editMessageText(
+          '❌ *Noto\'g\'ri kod!*',
+          parseMode: ParseMode.markdown,
+        );
+        return;
+      }
+
       await ctx.answerCallbackQuery(text: 'Quiz yuklanmoqda...');
 
       // Get quiz data
@@ -270,11 +309,14 @@ class ShareHandler {
         return;
       }
 
-      // Create quiz object
+      // FIXED: Ensure subject name is not null
+      final subjectName = quizData['subject_name'] as String? ?? 'Ulashilgan quiz';
+
+      // Create quiz object with shareCode
       final quiz = Quiz(
         questions: questions,
-        subjectName: quizData['subject_name'] as String?,
-        shareCode: shareCode,
+        subjectName: subjectName,
+        shareCode: shareCode, // FIXED: Pass shareCode here
       );
 
       // Create session

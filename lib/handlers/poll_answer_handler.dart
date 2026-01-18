@@ -36,6 +36,13 @@ class PollAnswerHandler {
         return;
       }
 
+      // FIXED: Check if this is the correct poll
+      final currentPollId = sessionManager.getCurrentPollId(userId);
+      if (currentPollId != null && pollAnswer.pollId != currentPollId) {
+        print('⚠️ Old poll answer ignored for user $userId');
+        return;
+      }
+
       final question = session.currentQuestion;
       final isCorrect = pollAnswer.optionIds.contains(question.correctOptionIndex);
 
@@ -47,10 +54,11 @@ class PollAnswerHandler {
         print('❌ User $userId answered incorrectly');
       }
 
-      sessionManager.nextQuestion(userId);
+      // FIXED: Move to next question BEFORE checking completion
+      final hasMore = sessionManager.nextQuestion(userId);
 
       // Check if quiz is completed
-      if (session.isCompleted) {
+      if (session.isCompleted || !hasMore) {
         print('🏁 Quiz completed for user $userId');
         await _sendResults(ctx, userId);
         return;
@@ -62,6 +70,9 @@ class PollAnswerHandler {
         await _handleMissedLimit(ctx, userId);
         return;
       }
+
+      // FIXED: Add small delay before sending next question
+      await Future.delayed(Duration(milliseconds: 300));
 
       // Send next question
       await _sendNextQuestion(ctx, userId);
@@ -172,8 +183,14 @@ class PollAnswerHandler {
   Future<void> _sendNextQuestion(Context ctx, int userId) async {
     try {
       final session = sessionManager.getSession(userId);
-      if (session == null || session.isCompleted) {
-        print('⚠️ Cannot send question: session null or completed');
+      if (session == null) {
+        print('⚠️ Cannot send question: session is null');
+        return;
+      }
+
+      if (session.isCompleted) {
+        print('⚠️ Cannot send question: session is completed');
+        await _sendResults(ctx, userId);
         return;
       }
 
@@ -185,9 +202,28 @@ class PollAnswerHandler {
         throw Exception('Savol noto\'g\'ri: kamida 2 ta variant bo\'lishi kerak');
       }
 
+      // FIXED: Validate options before creating poll
       final List<InputPollOption> pollOptions = [];
-      for (final opt in question.options) {
-        pollOptions.add(InputPollOption(text: _truncate(opt, 100)));
+      for (int i = 0; i < question.options.length; i++) {
+        final optionText = _truncate(question.options[i], 100);
+        if (optionText.trim().isEmpty) {
+          throw Exception('Variant $i bo\'sh');
+        }
+        pollOptions.add(InputPollOption(text: optionText));
+      }
+
+      // FIXED: Validate correct option index
+      if (question.correctOptionIndex < 0 ||
+          question.correctOptionIndex >= question.options.length) {
+        throw Exception('Noto\'g\'ri javob indeksi: ${question.correctOptionIndex}');
+      }
+
+      print('📤 Sending question ${session.currentQuestionIndex + 1} to user $userId');
+
+      // FIXED: Set openPeriod only if valid (5-600 seconds)
+      int? openPeriod;
+      if (quiz.timePerQuestion > 0) {
+        openPeriod = quiz.timePerQuestion.clamp(5, 600);
       }
 
       final pollMessage = await ctx.api.sendPoll(
@@ -197,25 +233,34 @@ class PollAnswerHandler {
         isAnonymous: false,
         type: PollType.quiz,
         correctOptionId: question.correctOptionIndex,
-        openPeriod: quiz.timePerQuestion > 0 ? quiz.timePerQuestion : null,
+        openPeriod: openPeriod,
+
       );
 
+      // FIXED: Always update poll ID
       if (pollMessage.poll != null) {
         sessionManager.updatePollId(userId, pollMessage.poll!.id);
+        print('✅ Question sent successfully. Poll ID: ${pollMessage.poll!.id}');
+      } else {
+        print('⚠️ Poll message sent but poll is null');
       }
 
-      print('✅ Question sent to user $userId');
     } catch (e, stack) {
       print('❌ _sendNextQuestion error: $e');
       print('Stack trace: $stack');
 
       try {
-        await ctx.api.sendMessage(
-          ChatID(userId),
-          '❌ *Savol yuborishda xatolik!*\n\n'
-              'Test to\'xtatildi. Qaytadan boshlang: /start',
-          parseMode: ParseMode.markdown,
-        );
+        // FIXED: Check if session still exists before ending
+        final session = sessionManager.getSession(userId);
+        if (session != null) {
+          await ctx.api.sendMessage(
+            ChatID(userId),
+            '❌ *Savol yuborishda xatolik!*\n\n'
+                'Sabab: ${e.toString()}\n\n'
+                '🔄 Qayta urinib ko\'ring: /start',
+            parseMode: ParseMode.markdown,
+          );
+        }
       } catch (e) {
         print('❌ Failed to send error message: $e');
       }
@@ -256,6 +301,7 @@ class PollAnswerHandler {
         }
       } catch (e) {
         print('⚠️ Failed to save result to Supabase: $e');
+        // Don't fail the whole function if Supabase fails
       }
 
       // Determine grade and message
@@ -346,7 +392,8 @@ class PollAnswerHandler {
   }
 
   String _truncate(String text, int maxLength) {
-    if (text.length <= maxLength) return text;
-    return '${text.substring(0, maxLength - 3)}...';
+    final cleanText = text.trim();
+    if (cleanText.length <= maxLength) return cleanText;
+    return '${cleanText.substring(0, maxLength - 3)}...';
   }
 }

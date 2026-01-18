@@ -299,19 +299,42 @@ class MessageHandler {
         return;
       }
 
-      // Share quiz
+      // FIXED: Share quiz with proper error handling
       if (data?.startsWith('share_quiz:') == true) {
-        final quizId = int.tryParse(data!.substring(11));
-        if (quizId == null) return;
+        final quizIdStr = data!.substring(11);
+        final quizId = int.tryParse(quizIdStr);
+
+        if (quizId == null) {
+          await ctx.answerCallbackQuery(text: '❌ Noto\'g\'ri quiz ID');
+          return;
+        }
 
         try {
+          // FIXED: Handle null return from generateShareCode
           final shareCode = await supabaseService.generateShareCode(quizId);
+
+          if (shareCode == null || shareCode.isEmpty) {
+            await ctx.answerCallbackQuery(
+              text: '❌ Share code yaratilmadi',
+            );
+            await ctx.reply(
+              '❌ *Xatolik!*\n\n'
+                  'Share code yaratilmadi. Qaytadan urinib ko\'ring.',
+              parseMode: ParseMode.markdown,
+            );
+            return;
+          }
 
           await ctx.answerCallbackQuery(
             text: '📤 Ulashish havolasi yaratildi!',
           );
 
           final botUsername = (await ctx.api.getMe()).username;
+
+          if (botUsername == null || botUsername.isEmpty) {
+            throw Exception('Bot username topilmadi');
+          }
+
           final shareUrl = 'https://t.me/$botUsername?start=quiz_$shareCode';
 
           await ctx.reply(
@@ -325,7 +348,7 @@ class MessageHandler {
                 [
                   InlineKeyboardButton(
                     text: '📤 Telegram orqali ulashish',
-                    url: 'https://t.me/share/url?url=$shareUrl&text=Bu quizni yeching!',
+                    url: 'https://t.me/share/url?url=$shareUrl&text=Bu quizni yeching! 🎯',
                   ),
                 ],
               ],
@@ -335,6 +358,12 @@ class MessageHandler {
           print('❌ Share error: $e');
           await ctx.answerCallbackQuery(
             text: '❌ Xatolik yuz berdi',
+          );
+          await ctx.reply(
+            '❌ *Ulashish xatoligi!*\n\n'
+                '${e.toString()}\n\n'
+                'Qaytadan urinib ko\'ring: /share',
+            parseMode: ParseMode.markdown,
           );
         }
         return;
@@ -443,10 +472,11 @@ class MessageHandler {
           break;
       }
 
-      sessionManager.createSession(userId, quiz);
-
+      // FIXED: Generate shareCode before creating session
       final shareCode = _generateShareCode();
       quiz = quiz.copyWith(shareCode: shareCode);
+
+      // Update session with new quiz
       sessionManager.createSession(userId, quiz);
 
       try {
@@ -460,9 +490,12 @@ class MessageHandler {
           };
         }).toList();
 
+        // FIXED: Ensure subjectName is not null
+        final subjectName = quiz.subjectName ?? 'Unknown Subject';
+
         final quizData = await supabaseService.saveQuiz(
           telegramId: userId,
-          subjectName: quiz.subjectName!,
+          subjectName: subjectName,
           totalQuestions: quiz.questions.length,
           isShuffled: quiz.shuffled,
           answersShuffled: quiz.answersShuffled,
@@ -473,9 +506,10 @@ class MessageHandler {
         );
 
         sessionManager.setQuizId(userId, quizData['id']);
-        print('✅ Quiz saved with share code: $shareCode');
+        print('✅ Quiz saved with ID: ${quizData['id']}, share code: $shareCode');
       } catch (e) {
         print('⚠️ Error saving quiz to Supabase: $e');
+        // Don't fail the quiz start if Supabase save fails
       }
 
       await ctx.reply(
@@ -561,7 +595,7 @@ class MessageHandler {
             callbackData: 'start_quiz:$quizId',
           ),
           InlineKeyboardButton(
-            text: '📤 Ulashish',
+            text: '📤',
             callbackData: 'share_quiz:$quizId',
           ),
         ]);

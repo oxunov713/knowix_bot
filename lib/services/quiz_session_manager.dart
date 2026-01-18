@@ -122,23 +122,25 @@ class QuizSessionManager {
       _timeoutTimers.remove(userId);
     }
   }
+// Add this to QuizSessionManager
+  String? getCurrentPollId(int userId) {
+    return _sessions[userId]?.currentPollId;
+  }
 
-  /// Move to next question
-  void nextQuestion(int userId) {
+// Update this in QuizSessionManager
+  bool nextQuestion(int userId) {
     final session = _sessions[userId];
     if (session != null) {
       session.currentQuestionIndex++;
       session.currentPollId = null;
       _cancelTimer(userId);
 
-      final current = session.currentQuestionIndex + 1;
-      final total = session.quiz.questions.length;
-      print('➡️ User $userId moved to question $current/$total');
+      // Return true if there are more questions
+      return session.currentQuestionIndex < session.quiz.questions.length;
     }
+    return false;
   }
-
-  /// End and remove session
-  QuizSession? endSession(int userId) {
+ QuizSession? endSession(int userId) {
     try {
       _cancelTimer(userId);
       _missedQuestions.remove(userId);
