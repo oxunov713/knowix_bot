@@ -8,10 +8,12 @@ void main() async {
   // final supabaseUrl = Platform.environment['SUPABASE_URL'];
   // final supabaseKey = Platform.environment['SUPABASE_ANON_KEY'];
   final botToken = "8338523756:AAG9p6Wz5O3Z4fQ0gq3vvj5AgRYsDQqhzQw";
-  final supabaseUrl ="https://vpaeafutvsqestnqqiav.supabase.co";
+  final supabaseUrl ="https://kcqjxkswvzxuobrqukxa.supabase.co";
   final supabaseKey =
-      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZwYWVhZnV0dnNxZXN0bnFxaWF2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY4MzE4MzQsImV4cCI6MjA4MjQwNzgzNH0.QfstsNYQQfIgWfJ6L1DAWIcrAt7saGUm9dAXdPbLb-g";
-// Validate BOT_TOKEN (required)
+
+
+
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtjcWp4a3N3dnp4dW9icnF1a3hhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg3NDA4NDQsImV4cCI6MjA4NDMxNjg0NH0.yAQvEY-aStHRhxaltaLxbmW9NA7E-U0tAyLZKbOWG7g";// Validate BOT_TOKEN (required)
   if (botToken == null || botToken.isEmpty) {
     print('❌ Error: BOT_TOKEN environment variable not set');
     print('💡 Usage: export BOT_TOKEN=your_token && dart run bin/main.dart');

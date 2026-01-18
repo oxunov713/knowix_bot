@@ -2,15 +2,14 @@ import '../models/quiz_session.dart';
 import '../models/quiz.dart';
 import 'dart:async';
 
-/// Manages active quiz sessions for users (Supabase integratsiyasi uchun yaxshilangan)
+/// Enhanced quiz session manager with shuffle tracking
 class QuizSessionManager {
   final Map<int, QuizSession> _sessions = {};
   final Map<int, Timer> _timeoutTimers = {};
   final Map<int, int> _missedQuestions = {};
-
-  // Qo'shimcha ma'lumotlar Supabase uchun
   final Map<int, String> _fileNames = {};
   final Map<int, int> _quizIds = {};
+  final Map<int, String> _shuffleChoices = {}; // NEW: Track shuffle choices
 
   static const int maxMissedQuestions = 3;
   static const Duration timeoutDuration = Duration(minutes: 2);
@@ -68,7 +67,6 @@ class QuizSessionManager {
   void _handleTimeout(int userId) {
     final missed = (_missedQuestions[userId] ?? 0) + 1;
     _missedQuestions[userId] = missed;
-
     print('⏰ User $userId missed question (${missed}/${maxMissedQuestions})');
   }
 
@@ -118,6 +116,7 @@ class QuizSessionManager {
     _missedQuestions.remove(userId);
     _fileNames.remove(userId);
     _quizIds.remove(userId);
+    _shuffleChoices.remove(userId);
     return _sessions.remove(userId);
   }
 
@@ -131,45 +130,47 @@ class QuizSessionManager {
     _sessions.clear();
     _fileNames.clear();
     _quizIds.clear();
+    _shuffleChoices.clear();
   }
 
   /// Get session count
   int get sessionCount => _sessions.length;
 
-  /// Update pending shuffle choice
-  void setPendingShuffleChoice(int userId, bool shuffle) {
-    final session = _sessions[userId];
-    if (session != null) {
-      session.pendingShuffleChoice = shuffle;
-    }
-  }
-
-  // ==================== SUPABASE UCHUN QOSHIMCHA METODLAR ====================
-
-  /// Fayl nomini saqlash
+  /// Set file name for user
   void setFileName(int userId, String fileName) {
     _fileNames[userId] = fileName;
   }
 
-  /// Fayl nomini olish
+  /// Get file name for user
   String? getFileName(int userId) {
     return _fileNames[userId];
   }
 
-  /// Quiz ID ni saqlash (Supabase dan)
+  /// Set quiz ID for user
   void setQuizId(int userId, int quizId) {
     _quizIds[userId] = quizId;
   }
 
-  /// Quiz ID ni olish
+  /// Get quiz ID for user
   int? getQuizId(int userId) {
     return _quizIds[userId];
   }
 
-  /// Session ma'lumotlarini to'liq tozalash
+  /// Set shuffle choice for user
+  void setShuffleChoice(int userId, String choice) {
+    _shuffleChoices[userId] = choice;
+  }
+
+  /// Get shuffle choice for user
+  String? getShuffleChoice(int userId) {
+    return _shuffleChoices[userId];
+  }
+
+  /// Clear user data completely
   void clearUserData(int userId) {
     endSession(userId);
     _fileNames.remove(userId);
     _quizIds.remove(userId);
+    _shuffleChoices.remove(userId);
   }
 }
