@@ -40,7 +40,7 @@ void main() async {
     );
 
     // ✅ Start bot with retry
-    await bot.start();
+
 await bot.stop();
     // ✅ Setup graceful shutdown
     _setupGracefulShutdown(bot);
