@@ -4,7 +4,7 @@ import 'quiz_text_normalizer.dart';
 import 'quiz_parser_service.dart';
 import '../models/quiz.dart';
 
-/// High-level service for quiz operations with error handling
+/// High-level service for quiz operations with multi-format support
 class QuizService {
   final FileTextExtractorService extractor;
   final QuizTextNormalizer normalizer;
@@ -18,7 +18,7 @@ class QuizService {
   /// Process a file and return a Quiz object with robust error handling
   Future<Quiz> processFile(File file) async {
     try {
-      print('🔄 Processing file: ${file.path}');
+      print('🔄 Fayl qayta ishlanmoqda: ${file.path}');
 
       // Extract text from file with timeout
       final rawText = await extractor.extractText(file).timeout(
@@ -32,20 +32,30 @@ class QuizService {
         throw FormatException('Fayl bo\'sh yoki o\'qib bo\'lmadi');
       }
 
-      print('✅ Text extracted: ${rawText.length} characters');
+      print('✅ Matn ajratildi: ${rawText.length} belgi');
 
-      // Check if text contains quiz tokens
-      if (!normalizer.hasQuizTokens(rawText)) {
+      // Detect format
+      final format = normalizer.detectQuizFormat(rawText);
+      print('📋 Aniqlangan format: $format');
+
+      if (format == 'unknown') {
         throw FormatException(
             'Faylda test formati topilmadi!\n\n'
-                'Kerakli formatlar:\n'
-                '+++++ (savol belgisi)\n'
-                '===== (variant belgisi)\n'
-                '# (to\'g\'ri javob belgisi)'
+                'Qo\'llab-quvvatlanuvchi formatlar:\n\n'
+                '1️⃣ Raqamli format:\n'
+                '1. Savol matni?\n'
+                '# To\'g\'ri javob\n'
+                '- Noto\'g\'ri variant 1\n'
+                '- Noto\'g\'ri variant 2\n\n'
+                '2️⃣ Hemis format:\n'
+                '+++++ Savol matni\n'
+                '===== Variant 1\n'
+                '===== #To\'g\'ri javob\n'
+                '===== Variant 3'
         );
       }
 
-      print('✅ Quiz tokens detected');
+      print('✅ Format aniqlandi: $format');
 
       // Parse the quiz with error handling
       final quiz = parser.parseRawText(rawText);
@@ -59,17 +69,17 @@ class QuizService {
         throw FormatException('Quiz validatsiyadan o\'tmadi');
       }
 
-      print('✅ Quiz parsed successfully: ${quiz.questions.length} questions');
+      print('✅ Quiz muvaffaqiyatli parse qilindi: ${quiz.questions.length} ta savol');
       return quiz;
 
     } on TimeoutException catch (e) {
-      print('❌ Timeout error: $e');
+      print('❌ Timeout xatosi: $e');
       throw FormatException('Fayl qayta ishlash juda uzoq davom etdi. Kichikroq fayl yuboring.');
     } on FormatException catch (e) {
-      print('❌ Format error: $e');
+      print('❌ Format xatosi: $e');
       rethrow;
     } catch (e, stack) {
-      print('❌ Unexpected error in processFile: $e');
+      print('❌ Kutilmagan xatolik: $e');
       print('Stack trace: $stack');
       throw Exception('Faylni qayta ishlashda kutilmagan xatolik: ${e.toString()}');
     }
@@ -82,13 +92,20 @@ class QuizService {
         throw FormatException('Matn bo\'sh');
       }
 
-      if (!normalizer.hasQuizTokens(rawText)) {
+      final format = normalizer.detectQuizFormat(rawText);
+
+      if (format == 'unknown') {
         throw FormatException(
             'Matndagi test formati noto\'g\'ri!\n\n'
-                'Kerakli formatlar:\n'
-                '+++++ (savol)\n'
-                '===== (variant)\n'
-                '# (to\'g\'ri javob)'
+                'Qo\'llab-quvvatlanuvchi formatlar:\n\n'
+                '1️⃣ Raqamli format:\n'
+                '1. Savol?\n'
+                '# To\'g\'ri javob\n'
+                '- Noto\'g\'ri variant\n\n'
+                '2️⃣ Hemis format:\n'
+                '+++++ Savol\n'
+                '===== Variant\n'
+                '===== #To\'g\'ri'
         );
       }
 
@@ -104,7 +121,7 @@ class QuizService {
 
       return quiz;
     } catch (e) {
-      print('❌ Error in processText: $e');
+      print('❌ processText xatosi: $e');
       rethrow;
     }
   }
@@ -112,7 +129,7 @@ class QuizService {
   /// Validate a quiz with detailed checks
   bool validateQuiz(Quiz quiz) {
     if (quiz.questions.isEmpty) {
-      print('⚠️ Validation failed: No questions');
+      print('⚠️ Validatsiya muvaffaqiyatsiz: Savollar yo\'q');
       return false;
     }
 
@@ -120,24 +137,24 @@ class QuizService {
       final question = quiz.questions[i];
 
       if (question.text.isEmpty) {
-        print('⚠️ Validation failed: Question $i has empty text');
+        print('⚠️ Validatsiya muvaffaqiyatsiz: Savol $i matni bo\'sh');
         return false;
       }
 
       if (question.options.length < 2) {
-        print('⚠️ Validation failed: Question $i has less than 2 options');
+        print('⚠️ Validatsiya muvaffaqiyatsiz: Savol $i da 2 tadan kam variant');
         return false;
       }
 
       if (question.correctOptionIndex < 0 ||
           question.correctOptionIndex >= question.options.length) {
-        print('⚠️ Validation failed: Question $i has invalid correct index');
+        print('⚠️ Validatsiya muvaffaqiyatsiz: Savol $i da noto\'g\'ri javob indeksi');
         return false;
       }
 
       for (var opt in question.options) {
         if (opt.isEmpty) {
-          print('⚠️ Validation failed: Question $i has empty option');
+          print('⚠️ Validatsiya muvaffaqiyatsiz: Savol $i da bo\'sh variant');
           return false;
         }
       }
@@ -154,6 +171,44 @@ class QuizService {
   /// Get supported file extensions
   List<String> getSupportedExtensions() {
     return ['.txt', '.doc', '.docx'];
+  }
+
+  /// Get format info for user
+  String getFormatInfo() {
+    return '''
+📋 Qo'llab-quvvatlanuvchi formatlar:
+
+1️⃣ RAQAMLI FORMAT (yangi):
+━━━━━━━━━━━━━━━━━━━━━
+1. Birinchi savol matni?
+# To'g'ri javob
+- Noto'g'ri variant 1
+- Noto'g'ri variant 2
+- Noto'g'ri variant 3
+
+2. Ikkinchi savol matni?
+# To'g'ri javob
+- Noto'g'ri variant 1
+- Noto'g'ri variant 2
+
+2️⃣ HEMIS FORMAT (eski):
+━━━━━━━━━━━━━━━━━━━━━
++++++ Birinchi savol matni
+===== Variant 1
+===== #To'g'ri javob
+===== Variant 3
+===== Variant 4
+
++++++ Ikkinchi savol matni
+===== Variant 1
+===== Variant 2
+===== #To'g'ri javob
+
+💡 Eslatma:
+• Raqamli formatda # - to'g'ri javob, - - noto'g'ri javob
+• Hemis formatda # - to'g'ri javobni belgilaydi
+• Har ikki format ham qo'llab-quvvatlanadi!
+''';
   }
 }
 
